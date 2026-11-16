@@ -1,11 +1,8 @@
 --!nocheck
 --=====================================================================
--- Spawned Items Monitor v21
---   * Restored Dashboard & Count labels
---   * Fixed minimize Z-fighting (smooth collapse)
---   * Improved separator line (stretches full height + gradient)
---   * Fixed Supplies count text
---   * White text pops on Teleport button
+-- Spawned Items Monitor v24
+--   * Fixed minimize corner artifacts (Instant hide + smooth shrink)
+--   * Added Mysterious Arrow spawn-node verification
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -28,7 +25,7 @@ local C_BG      = Color3.fromRGB(22, 24, 29)
 local C_PANEL   = Color3.fromRGB(32, 35, 41)
 local C_ROW     = Color3.fromRGB(42, 46, 54)
 local C_ROW_HOT = Color3.fromRGB(56, 61, 72)
-local C_ACCENT  = Color3.fromRGB(0, 162, 255)
+local C_ACCENT  = Color3.fromRGB(100, 0, 255) -- Hex #6400ff
 local C_TEXT    = Color3.fromRGB(236, 239, 244)
 local C_SUB     = Color3.fromRGB(145, 153, 168)
 local C_OK      = Color3.fromRGB(72, 214, 128)
@@ -192,6 +189,42 @@ local function getDisplayName(item, tabName)
 	end
 	if #candidates == 1 then return candidates[1].Name end
 	return item.Name
+end
+
+--=====================================================================
+-- ANTI-FAKE: Mysterious Arrow Verification
+--=====================================================================
+local function isValidItem(item, tabName)
+	if tabName ~= "Items" then return true end
+
+	local name = getDisplayName(item, tabName)
+	if name == "Mysterious Arrow" then
+		local gameFolder = workspace:FindFirstChild("Game")
+		local nodesFolder = gameFolder and gameFolder:FindFirstChild("ItemSpawnNodes")
+		local arrowsFolder = nodesFolder and nodesFolder:FindFirstChild("Arrows")
+		
+		-- If the spawn nodes folder doesn't exist, we can't verify, so let it pass (or block it if you prefer)
+		if not arrowsFolder then return true end 
+
+		local part = getPart(item)
+		if not part then return false end
+		local pos = part.Position
+
+		-- Check if it is within 10 studs of Arrow01 to Arrow09
+		for _, node in arrowsFolder:GetChildren() do
+			if node.Name:match("^Arrow0%d$") then
+				local nodePos = node:IsA("BasePart") and node.Position or node:GetPivot().Position
+				if (nodePos - pos).Magnitude <= 10 then
+					return true -- Real arrow
+				end
+			end
+		end
+
+		-- If we loop through all nodes and it's not near any, it's a fake.
+		return false 
+	end
+
+	return true
 end
 
 local function collectEntries(container, tabName)
@@ -442,7 +475,7 @@ main.Position         = UDim2.fromOffset(16, 90)
 main.Size             = UDim2.fromOffset(480, 460)
 main.BackgroundColor3 = C_BG
 main.BorderSizePixel  = 0
-main.ClipsDescendants = true -- PREVENTS Z-FIGHTING
+main.ClipsDescendants = true
 main.Parent           = gui
 corner(main, 10)
 
@@ -458,7 +491,7 @@ header.Size             = UDim2.new(1, 0, 0, 36)
 header.BackgroundColor3 = C_PANEL
 header.BorderSizePixel  = 0
 header.Active           = false
-header.ZIndex           = 10 -- KEEPS HEADER ON TOP WHEN SHRINKING
+header.ZIndex           = 10
 header.Parent           = main
 corner(header, 10)
 
@@ -533,7 +566,7 @@ tabPad.Parent = tabBar
 
 -- Improved Gradient Separator -----------------------------------------
 local separator = Instance.new("Frame")
-separator.Size = UDim2.new(0, 1, 1, -36) -- Stretches all the way to bottom
+separator.Size = UDim2.new(0, 1, 1, -36)
 separator.Position = UDim2.fromOffset(140, 36)
 separator.BackgroundColor3 = Color3.fromRGB(40, 43, 50)
 separator.BorderSizePixel = 0
@@ -541,9 +574,9 @@ separator.Parent = main
 
 local sepGradient = Instance.new("UIGradient")
 sepGradient.Color = ColorSequence.new{
-	ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 33, 38)), -- Fades top
-	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(60, 65, 75)), -- Bright middle
-	ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 33, 38))  -- Fades bottom
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 33, 38)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(60, 65, 75)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 33, 38))
 }
 sepGradient.Rotation = 90
 sepGradient.Parent = separator
@@ -776,7 +809,6 @@ local function createManager(tab)
 		tp.Font             = Enum.Font.GothamBold
 		tp.TextSize         = 11
 		tp.TextColor3       = Color3.new(1, 1, 1)
-		-- White text pop
 		tp.TextStrokeColor3 = Color3.new(0, 0, 0)
 		tp.TextStrokeTransparency = 0.5
 		
@@ -913,7 +945,16 @@ local function createManager(tab)
 			return
 		end
 
-		local entries = collectEntries(container, tab.name)
+		local rawEntries = collectEntries(container, tab.name)
+		
+		-- Filter out invalid/fake items
+		local entries = {}
+		for _, item in ipairs(rawEntries) do
+			if isValidItem(item, tab.name) then
+				table.insert(entries, item)
+			end
+		end
+
 		table.sort(entries, function(a, b)
 			return string.lower(getDisplayName(a, tab.name)) < string.lower(getDisplayName(b, tab.name))
 		end)
@@ -1020,7 +1061,11 @@ local function createManager(tab)
 	tab.getItemSet = function(cont)
 		local set = {}
 		if not cont then return set end
-		for _, item in ipairs(collectEntries(cont, tab.name)) do set[item] = true end
+		for _, item in ipairs(collectEntries(cont, tab.name)) do 
+			if isValidItem(item, tab.name) then
+				set[item] = true 
+			end
+		end
 		return set
 	end
 end
@@ -1124,21 +1169,22 @@ minBtn.MouseButton1Click:Connect(function()
 	minBtn.Text = minimized and "+" or "—"
 	
 	if minimized then
-		-- Hide contents instantly before shrinking (fixes Z-fighting)
+		-- Instantly hide contents to prevent ANY corner artifacts
 		tabBar.Visible = false
 		separator.Visible = false
 		footer.Visible = false
 		for _, t in ipairs(tabs) do t.body.Visible = false end
 		
-		TweenService:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Size = collapsedSize
 		}):Play()
 	else
-		TweenService:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Size = expandedSize
 		}):Play()
 		
-		task.delay(0.2, function()
+		-- Show contents after a tiny delay to prevent UI flashing during expansion
+		task.delay(0.1, function()
 			if not minimized then
 				tabBar.Visible = true
 				separator.Visible = true
