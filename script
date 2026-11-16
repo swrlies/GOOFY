@@ -1,8 +1,10 @@
 --!nocheck
 --=====================================================================
--- Spawned Items Monitor v24
---   * Fixed minimize corner artifacts (Instant hide + smooth shrink)
---   * Added Mysterious Arrow spawn-node verification
+-- Stand Out Dashboard v30
+--   * Added Case #8
+--   * "Show Distance" now defaults to OFF
+--   * Minimize button is now a standard hyphen
+--   * Reopen button is now "SO" and is draggable
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -46,6 +48,7 @@ local STATIC_CASES = {
 	Vector3.new(-1344.33, 16.82, 2185.03), -- 5
 	Vector3.new(-1846.07, 16.03, 1206.89), -- 6
 	Vector3.new(-2248.65, 14.63, 823.82),  -- 7
+	Vector3.new(185.34, 17.44, 1717.25),   -- 8
 }
 
 local STATIC_TELEPORTS = {
@@ -57,7 +60,7 @@ local STATIC_TELEPORTS = {
 	{Label = "Swat Car", Pos = Vector3.new(-457, 19, 1578), Group = "Raids", Order = 5},
 }
 
--- Generate invisible beacon parts for the static elements
+-- Generate invisible beacon parts
 local caseBeaconFolder = Instance.new("Folder")
 caseBeaconFolder.Name = "SIM_CaseBeacons"
 caseBeaconFolder.Parent = workspace
@@ -91,7 +94,98 @@ for _, data in ipairs(STATIC_TELEPORTS) do
 end
 
 --=====================================================================
--- passive case radar
+-- Scrap Barges Radar
+--=====================================================================
+local scrapBeaconFolder = Instance.new("Folder")
+scrapBeaconFolder.Name = "SIM_ScrapBeacons"
+scrapBeaconFolder.Parent = workspace
+
+local function updateScrapBeacons()
+	local gameFolder = workspace:FindFirstChild("Game")
+	local mapFolder  = gameFolder and gameFolder:FindFirstChild("Map")
+	if not mapFolder then
+		for _, b in ipairs(scrapBeaconFolder:GetChildren()) do b:Destroy() end
+		return
+	end
+
+	local pieces = {}
+	for _, obj in ipairs(mapFolder:GetDescendants()) do
+		if obj.Name == "DebrisPiece" then
+			local pos = obj:IsA("Model") and obj:GetPivot().Position or (obj:IsA("BasePart") and obj.Position)
+			if pos then
+				table.insert(pieces, {object = obj, position = pos})
+			end
+		end
+	end
+
+	local groups = {}
+	for _, piece in ipairs(pieces) do
+		local found = false
+		for _, g in ipairs(groups) do
+			if (g.position - piece.position).Magnitude <= 15 then
+				found = true
+				break
+			end
+		end
+		if not found then
+			table.insert(groups, piece)
+		end
+	end
+
+	local existing = {}
+	for _, b in ipairs(scrapBeaconFolder:GetChildren()) do
+		existing[b] = true
+	end
+
+	for i, g in ipairs(groups) do
+		local name = "Scrap Barge " .. i
+		local beacon = scrapBeaconFolder:FindFirstChild(name)
+		if not beacon then
+			beacon = Instance.new("Part")
+			beacon.Name = name
+			beacon.Anchored = true
+			beacon.CanCollide = false
+			beacon.Transparency = 1
+			beacon.Size = Vector3.new(1,1,1)
+			beacon.Parent = scrapBeaconFolder
+		end
+		beacon.Position = g.position
+		existing[beacon] = nil
+	end
+
+	for b in pairs(existing) do
+		b:Destroy()
+	end
+end
+
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		updateScrapBeacons()
+	end
+end)
+
+task.spawn(function()
+	local map = workspace:FindFirstChild("Game") and workspace.Game:FindFirstChild("Map")
+	if map then
+		map.DescendantRemoving:Connect(function(obj)
+			if obj.Name == "DebrisPiece" then
+				task.wait(0.1)
+				updateScrapBeacons()
+				local scrapTab = nil
+				for _, t in ipairs(tabs) do 
+					if t.name == "Scrap Barges" then scrapTab = t break end 
+				end
+				if scrapTab and activeTab == scrapTab then
+					scrapTab.rebuild()
+				end
+			end
+		end)
+	end
+end)
+
+--=====================================================================
+-- Passive Case Radar
 --=====================================================================
 local caseCount = #STATIC_CASES
 
@@ -161,7 +255,7 @@ local function corner(parent, r)
 end
 
 local function getDisplayName(item, tabName)
-	if tabName == "Cases" or tabName == "Teleports" then
+	if tabName == "Cases" or tabName == "Teleports" or tabName == "Scrap Barges" then
 		return item.Name
 	end
 
@@ -203,27 +297,22 @@ local function isValidItem(item, tabName)
 		local nodesFolder = gameFolder and gameFolder:FindFirstChild("ItemSpawnNodes")
 		local arrowsFolder = nodesFolder and nodesFolder:FindFirstChild("Arrows")
 		
-		-- If the spawn nodes folder doesn't exist, we can't verify, so let it pass (or block it if you prefer)
 		if not arrowsFolder then return true end 
 
 		local part = getPart(item)
 		if not part then return false end
 		local pos = part.Position
 
-		-- Check if it is within 10 studs of Arrow01 to Arrow09
 		for _, node in arrowsFolder:GetChildren() do
 			if node.Name:match("^Arrow0%d$") then
 				local nodePos = node:IsA("BasePart") and node.Position or node:GetPivot().Position
 				if (nodePos - pos).Magnitude <= 10 then
-					return true -- Real arrow
+					return true
 				end
 			end
 		end
-
-		-- If we loop through all nodes and it's not near any, it's a fake.
 		return false 
 	end
-
 	return true
 end
 
@@ -296,6 +385,10 @@ local function notifySpawn(item, tabName)
 	local name = getDisplayName(item, tabName)
 	local now = os.clock()
 	
+	if tabName == "Items" and not isValidItem(item, tabName) then
+		return
+	end
+
 	if lastNotifTime[name] and (now - lastNotifTime[name]) < 2 then
 		return
 	end
@@ -459,7 +552,7 @@ gui.Parent       = PlayerGui
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size              = UDim2.fromOffset(34, 34)
 toggleBtn.Position          = UDim2.new(1, -44, 0, 44)
-toggleBtn.Text              = "SI"
+toggleBtn.Text              = "SO"
 toggleBtn.Font              = Enum.Font.GothamBold
 toggleBtn.TextSize          = 12
 toggleBtn.TextColor3        = C_TEXT
@@ -479,11 +572,6 @@ main.ClipsDescendants = true
 main.Parent           = gui
 corner(main, 10)
 
-local mainStroke = Instance.new("UIStroke")
-mainStroke.Color     = Color3.fromRGB(60, 65, 75)
-mainStroke.Thickness = 1
-mainStroke.Parent    = main
-
 -- header --------------------------------------------------------------
 local header = Instance.new("Frame")
 header.Name             = "Header"
@@ -493,16 +581,22 @@ header.BorderSizePixel  = 0
 header.Active           = false
 header.ZIndex           = 10
 header.Parent           = main
-corner(header, 10)
+
+local headerCorner = Instance.new("UICorner")
+headerCorner.TopLeftRadius = UDim.new(0, 10)
+headerCorner.TopRightRadius = UDim.new(0, 10)
+headerCorner.BottomLeftRadius = UDim.new(0, 0)
+headerCorner.BottomRightRadius = UDim.new(0, 0)
+headerCorner.Parent = header
 
 local title = Instance.new("TextLabel")
-title.Text              = "Dashboard"
+title.Text              = "Stand Out Dashboard"
 title.Font              = Enum.Font.GothamBold
 title.TextSize          = 14
 title.TextColor3        = C_TEXT
 title.BackgroundTransparency = 1
 title.Position          = UDim2.fromOffset(12, 0)
-title.Size              = UDim2.fromOffset(100, 36)
+title.Size              = UDim2.fromOffset(160, 36)
 title.TextXAlignment    = Enum.TextXAlignment.Left
 title.Active            = false
 title.ZIndex            = 10
@@ -516,16 +610,16 @@ countLabel.TextColor3       = C_TEXT
 countLabel.BackgroundColor3 = C_ACCENT
 countLabel.BackgroundTransparency = 0.2
 countLabel.Size             = UDim2.fromOffset(40, 22)
-countLabel.Position         = UDim2.fromOffset(100, 7)
+countLabel.Position         = UDim2.fromOffset(160, 7)
 countLabel.Active           = false
 countLabel.ZIndex           = 10
 countLabel.Parent           = header
 corner(countLabel, 6)
 
 local minBtn = Instance.new("TextButton")
-minBtn.Text              = "—"
+minBtn.Text              = "-"
 minBtn.Font              = Enum.Font.GothamBold
-minBtn.TextSize          = 16
+minBtn.TextSize          = 24
 minBtn.TextColor3        = C_SUB
 minBtn.BackgroundTransparency = 1
 minBtn.Size              = UDim2.fromOffset(28, 28)
@@ -564,7 +658,7 @@ local tabPad = Instance.new("UIPadding")
 tabPad.PaddingTop = UDim.new(0, 10)
 tabPad.Parent = tabBar
 
--- Improved Gradient Separator -----------------------------------------
+-- Gradient Separator -----------------------------------------
 local separator = Instance.new("Frame")
 separator.Size = UDim2.new(0, 1, 1, -36)
 separator.Position = UDim2.fromOffset(140, 36)
@@ -645,6 +739,15 @@ local tabs = {
 			return teleportBeaconFolder
 		end,
 	},
+	{
+		name          = "Scrap Barges",
+		emptyText     = "No scrap barges found.",
+		autoHighlight = false,
+		notify        = false,
+		getContainer  = function()
+			return scrapBeaconFolder
+		end,
+	},
 }
 
 local function buildTabBtn(tab, index, parentFrame)
@@ -671,6 +774,43 @@ local function buildTabBody(tab, parentFrame)
 	body.Visible               = false
 	body.Parent                = parentFrame
 
+	-- Distance Toggle Bar
+	local toggleBar = Instance.new("Frame")
+	toggleBar.Size = UDim2.new(1, 0, 0, 36)
+	toggleBar.BackgroundColor3 = Color3.fromRGB(28, 30, 35)
+	toggleBar.BorderSizePixel = 0
+	toggleBar.Parent = body
+
+	local toggleBorder = Instance.new("Frame")
+	toggleBorder.Size = UDim2.new(1, 0, 0, 1)
+	toggleBorder.Position = UDim2.new(0, 0, 1, -1)
+	toggleBorder.BackgroundColor3 = Color3.fromRGB(40, 43, 50)
+	toggleBorder.BorderSizePixel = 0
+	toggleBorder.Parent = toggleBar
+
+	local toggleLbl = Instance.new("TextLabel")
+	toggleLbl.Text = "Show Distance"
+	toggleLbl.Font = Enum.Font.GothamBold
+	toggleLbl.TextSize = 11
+	toggleLbl.TextColor3 = C_SUB
+	toggleLbl.BackgroundTransparency = 1
+	toggleLbl.Position = UDim2.fromOffset(12, 0)
+	toggleLbl.Size = UDim2.new(1, -100, 1, 0)
+	toggleLbl.TextXAlignment = Enum.TextXAlignment.Left
+	toggleLbl.Parent = toggleBar
+
+	local toggleBtn = Instance.new("TextButton")
+	toggleBtn.Text = "OFF"
+	toggleBtn.Font = Enum.Font.GothamBold
+	toggleBtn.TextSize = 10
+	toggleBtn.TextColor3 = C_TEXT
+	toggleBtn.BackgroundColor3 = C_ROW
+	toggleBtn.BorderSizePixel = 0
+	toggleBtn.Size = UDim2.fromOffset(44, 20)
+	toggleBtn.Position = UDim2.new(1, -56, 0.5, -10)
+	toggleBtn.Parent = toggleBar
+	corner(toggleBtn, 10)
+
 	local search = Instance.new("TextBox")
 	search.PlaceholderText   = "Filter by name..."
 	search.Text              = ""
@@ -681,7 +821,7 @@ local function buildTabBody(tab, parentFrame)
 	search.PlaceholderColor3 = C_SUB
 	search.BackgroundColor3  = C_PANEL
 	search.BorderSizePixel   = 0
-	search.Position          = UDim2.fromOffset(10, 10)
+	search.Position          = UDim2.fromOffset(10, 46)
 	search.Size              = UDim2.new(1, -20, 0, 26)
 	search.TextXAlignment    = Enum.TextXAlignment.Left
 	search.Parent            = body
@@ -695,13 +835,13 @@ local function buildTabBody(tab, parentFrame)
 	status.TextColor3        = C_SUB
 	status.BackgroundTransparency = 1
 	status.TextXAlignment    = Enum.TextXAlignment.Left
-	status.Position          = UDim2.fromOffset(12, 40)
+	status.Position          = UDim2.fromOffset(12, 76)
 	status.Size              = UDim2.new(1, -24, 0, 16)
 	status.Parent            = body
 
 	local scroll = Instance.new("ScrollingFrame")
-	scroll.Position              = UDim2.fromOffset(10, 60)
-	scroll.Size                  = UDim2.new(1, -20, 1, -70)
+	scroll.Position              = UDim2.fromOffset(10, 96)
+	scroll.Size                  = UDim2.new(1, -20, 1, -106)
 	scroll.BackgroundTransparency= 1
 	scroll.BorderSizePixel       = 0
 	scroll.ScrollBarThickness    = 5
@@ -723,12 +863,13 @@ local function buildTabBody(tab, parentFrame)
 	empty.TextColor3        = C_SUB
 	empty.BackgroundTransparency = 1
 	empty.TextWrapped       = true
-	empty.Position          = UDim2.fromOffset(10, 60)
-	empty.Size              = UDim2.new(1, -20, 1, -70)
+	empty.Position          = UDim2.fromOffset(10, 96)
+	empty.Size              = UDim2.new(1, -20, 1, -106)
 	empty.Visible           = false
 	empty.Parent            = body
 
 	tab.body   = body
+	tab.toggleBtn = toggleBtn
 	tab.search = search
 	tab.status = status
 	tab.scroll = scroll
@@ -751,8 +892,20 @@ local function createManager(tab)
 		rows = {}, addedConn = nil, removedConn = nil,
 		lastContainer = nil, lastItemSet = {}, knownItems = {},
 		initialized = false, rebuildQueued = false, shownCount = 0,
+		showDistance = false, -- Default OFF
 	}
 	tab.state = state
+
+	tab.toggleBtn.MouseButton1Click:Connect(function()
+		state.showDistance = not state.showDistance
+		if state.showDistance then
+			tab.toggleBtn.Text = "ON"
+			tab.toggleBtn.BackgroundColor3 = C_OK
+		else
+			tab.toggleBtn.Text = "OFF"
+			tab.toggleBtn.BackgroundColor3 = C_ROW
+		end
+	end)
 
 	local function matchesFilter(item)
 		local q = string.lower(tab.search.Text)
@@ -764,9 +917,13 @@ local function createManager(tab)
 		local part        = getPart(item)
 		local displayName = getDisplayName(item, tab.name)
 
+		if tab.name == "Supplies" then
+			displayName = "Buried Supplies #" .. order
+		end
+
 		local rightMargin = -8
 		local hasHL   = not tab.autoHighlight
-		local hasCopy = (tab.name == "Cases" or tab.name == "Teleports")
+		local hasCopy = (tab.name == "Cases" or tab.name == "Teleports" or tab.name == "Scrap Barges")
 
 		if hasCopy then rightMargin = rightMargin - 40 - 6 end
 		if hasHL   then rightMargin = rightMargin - 34 - 6 end
@@ -947,7 +1104,6 @@ local function createManager(tab)
 
 		local rawEntries = collectEntries(container, tab.name)
 		
-		-- Filter out invalid/fake items
 		local entries = {}
 		for _, item in ipairs(rawEntries) do
 			if isValidItem(item, tab.name) then
@@ -987,7 +1143,6 @@ local function createManager(tab)
 
 		local shown = 0
 		
-		-- Custom Rendering for Teleports (Grouped)
 		if tab.name == "Teleports" then
 			local groups = {
 				["Miscellaneous"] = {},
@@ -1034,7 +1189,6 @@ local function createManager(tab)
 			renderGroup("Raids", groups["Raids"])
 			
 		else
-			-- Standard rendering
 			for _, item in ipairs(entries) do
 				if matchesFilter(item) then
 					shown += 1
@@ -1088,6 +1242,9 @@ updateCountLabel = function()
 	elseif activeTab.name == "Cases" then
 		countLabel.Text = count .. " found"
 		countLabel.Size = UDim2.fromOffset(70, 22)
+	elseif activeTab.name == "Scrap Barges" then
+		countLabel.Text = count .. " active"
+		countLabel.Size = UDim2.fromOffset(65, 22)
 	else
 		countLabel.Text = "Total: " .. count
 		countLabel.Size = UDim2.fromOffset(60, 22)
@@ -1131,6 +1288,7 @@ returnBtn.MouseButton1Click:Connect(function()
 	end
 end)
 
+-- Header Drag
 do
 	local dragging, dragStart, startPos
 	header.InputBegan:Connect(function(input)
@@ -1160,16 +1318,50 @@ do
 	end)
 end
 
+-- Toggle Button Drag
+do
+	local dragging, dragStart, startPos
+	toggleBtn.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+			dragging  = true
+			dragStart = input.Position
+			startPos  = toggleBtn.Position
+		end
+	end)
+	toggleBtn.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragging then return end
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch then
+			local d = input.Position - dragStart
+			toggleBtn.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + d.X,
+				startPos.Y.Scale, startPos.Y.Offset + d.Y
+			)
+		end
+	end)
+end
+
 local minimized     = false
 local expandedSize  = UDim2.fromOffset(480, 460)
 local collapsedSize = UDim2.fromOffset(480, 36)
 
 minBtn.MouseButton1Click:Connect(function()
 	minimized = not minimized
-	minBtn.Text = minimized and "+" or "—"
+	minBtn.Text = minimized and "+" or "-"
 	
 	if minimized then
-		-- Instantly hide contents to prevent ANY corner artifacts
+		TweenService:Create(headerCorner, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BottomLeftRadius = UDim.new(0, 10),
+			BottomRightRadius = UDim.new(0, 10)
+		}):Play()
+		
 		tabBar.Visible = false
 		separator.Visible = false
 		footer.Visible = false
@@ -1179,11 +1371,15 @@ minBtn.MouseButton1Click:Connect(function()
 			Size = collapsedSize
 		}):Play()
 	else
+		TweenService:Create(headerCorner, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BottomLeftRadius = UDim.new(0, 0),
+			BottomRightRadius = UDim.new(0, 0)
+		}):Play()
+		
 		TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Size = expandedSize
 		}):Play()
 		
-		-- Show contents after a tiny delay to prevent UI flashing during expansion
 		task.delay(0.1, function()
 			if not minimized then
 				tabBar.Visible = true
@@ -1266,12 +1462,16 @@ RunService.Heartbeat:Connect(function(dt)
 		for item, data in pairs(tab.state.rows) do
 			local p = data.part
 			if p and p:IsDescendantOf(workspace) then
-				local pos = p.Position
-				local txt = "Unknown distance"
-				if ppos then
-					txt = string.format("%d studs", math.round((pos - ppos).Magnitude))
+				if tab.state.showDistance then
+					local pos = p.Position
+					local txt = "Unknown distance"
+					if ppos then
+						txt = string.format("%d studs", math.round((pos - ppos).Magnitude))
+					end
+					data.info.Text = txt
+				else
+					data.info.Text = ""
 				end
-				data.info.Text = txt
 				data.tp.BackgroundColor3 = C_ACCENT
 			else
 				data.info.Text = "No BasePart found"
