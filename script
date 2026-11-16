@@ -1,0 +1,1242 @@
+--!nocheck
+--=====================================================================
+-- Spawned Items Monitor v21
+--   * Restored Dashboard & Count labels
+--   * Fixed minimize Z-fighting (smooth collapse)
+--   * Improved separator line (stretches full height + gradient)
+--   * Fixed Supplies count text
+--   * White text pops on Teleport button
+--=====================================================================
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera      = workspace.CurrentCamera
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
+
+local TEXT_HZ      = 8
+local POLL_RATE    = 0.5
+local AUTO_REFRESH = 4
+
+-- UI Palette
+local C_BG      = Color3.fromRGB(22, 24, 29)
+local C_PANEL   = Color3.fromRGB(32, 35, 41)
+local C_ROW     = Color3.fromRGB(42, 46, 54)
+local C_ROW_HOT = Color3.fromRGB(56, 61, 72)
+local C_ACCENT  = Color3.fromRGB(0, 162, 255)
+local C_TEXT    = Color3.fromRGB(236, 239, 244)
+local C_SUB     = Color3.fromRGB(145, 153, 168)
+local C_OK      = Color3.fromRGB(72, 214, 128)
+local C_WARN    = Color3.fromRGB(255, 186, 92)
+local C_ERR     = Color3.fromRGB(255, 120, 110)
+
+local HL_FILL    = Color3.fromRGB(255, 0, 200)
+local HL_OUTLINE = Color3.fromRGB(255, 255, 255)
+
+--=====================================================================
+-- STATIC COORDINATES
+--=====================================================================
+local STATIC_CASES = {
+	Vector3.new(-854.96, 16.88, 1425.11),  -- 1
+	Vector3.new(-791.88, 16.51, 697.80),   -- 2
+	Vector3.new(-233.61, 16.16, 1043.10),  -- 3
+	Vector3.new(-777.55, 33.44, 2595.58),  -- 4
+	Vector3.new(-1344.33, 16.82, 2185.03), -- 5
+	Vector3.new(-1846.07, 16.03, 1206.89), -- 6
+	Vector3.new(-2248.65, 14.63, 823.82),  -- 7
+}
+
+local STATIC_TELEPORTS = {
+	{Label = "D'arby", Pos = Vector3.new(-1065, 19, 2270), Group = "Miscellaneous", Order = 1},
+	{Label = "Raids", Pos = Vector3.new(-514, 19, 1995), Group = "Raids", Order = 1},
+	{Label = "Construction Site", Pos = Vector3.new(-30, 19, 925), Group = "Raids", Order = 2},
+	{Label = "Museum of Oahu", Pos = Vector3.new(-850, 19, 1811), Group = "Raids", Order = 3},
+	{Label = "School + Iko Iko", Pos = Vector3.new(-1276, 19, 1122), Group = "Raids", Order = 4},
+	{Label = "Swat Car", Pos = Vector3.new(-457, 19, 1578), Group = "Raids", Order = 5},
+}
+
+-- Generate invisible beacon parts for the static elements
+local caseBeaconFolder = Instance.new("Folder")
+caseBeaconFolder.Name = "SIM_CaseBeacons"
+caseBeaconFolder.Parent = workspace
+
+for i, pos in ipairs(STATIC_CASES) do
+	local beacon = Instance.new("Part")
+	beacon.Name = "Case " .. i
+	beacon.Position = pos
+	beacon.Anchored = true
+	beacon.CanCollide = false
+	beacon.Transparency = 1
+	beacon.Size = Vector3.new(1, 1, 1)
+	beacon.Parent = caseBeaconFolder
+end
+
+local teleportBeaconFolder = Instance.new("Folder")
+teleportBeaconFolder.Name = "SIM_TeleportBeacons"
+teleportBeaconFolder.Parent = workspace
+
+for _, data in ipairs(STATIC_TELEPORTS) do
+	local beacon = Instance.new("Part")
+	beacon.Name = data.Label
+	beacon.Position = data.Pos
+	beacon.Anchored = true
+	beacon.CanCollide = false
+	beacon.Transparency = 1
+	beacon.Size = Vector3.new(1, 1, 1)
+	beacon:SetAttribute("Group", data.Group)
+	beacon:SetAttribute("Order", data.Order)
+	beacon.Parent = teleportBeaconFolder
+end
+
+--=====================================================================
+-- passive case radar
+--=====================================================================
+local caseCount = #STATIC_CASES
+
+local function scanForCases()
+	local localProps = workspace:FindFirstChild("LocalProps")
+	if not localProps then return end
+	
+	for _, child in localProps:GetChildren() do
+		if child.Name == "Case" then
+			local pos
+			if child:IsA("BasePart") then pos = child.Position
+			elseif child:IsA("Model") then pos = child:GetPivot().Position end
+			
+			if pos then
+				local isSaved = false
+				for _, beacon in caseBeaconFolder:GetChildren() do
+					if (beacon.Position - pos).Magnitude < 15 then
+						isSaved = true
+						break
+					end
+				end
+				
+				if not isSaved then
+					caseCount += 1
+					local beacon = Instance.new("Part")
+					beacon.Name = "Case " .. caseCount
+					beacon.Position = pos
+					beacon.Anchored = true
+					beacon.CanCollide = false
+					beacon.Transparency = 1
+					beacon.Size = Vector3.new(1, 1, 1)
+					beacon.Parent = caseBeaconFolder
+				end
+			end
+		end
+	end
+end
+
+task.spawn(function()
+	while true do
+		scanForCases()
+		task.wait(2)
+	end
+end)
+
+--=====================================================================
+-- helpers
+--=====================================================================
+local function getPart(inst)
+	if inst:IsA("BasePart") then return inst end
+	if inst:IsA("Model") then
+		return inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+	end
+	return inst:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function getAdornee(item, part)
+	if item:IsA("Model") or item:IsA("BasePart") then return item end
+	return part
+end
+
+local function corner(parent, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, r or 6)
+	c.Parent = parent
+	return c
+end
+
+local function getDisplayName(item, tabName)
+	if tabName == "Cases" or tabName == "Teleports" then
+		return item.Name
+	end
+
+	if item.Name == "Handle" or item.Name == "SeedCorner" then
+		return "Buried Supplies"
+	end
+	if tabName == "Supplies" then
+		return "Buried Supplies"
+	end
+
+	if not item:IsA("Model") then return item.Name end
+	local pp = item.PrimaryPart
+	if pp and pp.Name ~= item.Name and pp.Name ~= "Handle" then
+		return pp.Name
+	end
+	local candidates = {}
+	for _, child in item:GetChildren() do
+		if child:IsA("Model") then
+			table.insert(candidates, child)
+		elseif child:IsA("BasePart") then
+			if child.Name ~= item.Name and child.Name ~= "Handle" and child.Name ~= "SeedCorner" then
+				table.insert(candidates, child)
+			end
+		end
+	end
+	if #candidates == 1 then return candidates[1].Name end
+	return item.Name
+end
+
+local function collectEntries(container, tabName)
+	local entries = {}
+	if not container then return entries end
+
+	if tabName == "Supplies" then
+		for _, child in container:GetChildren() do
+			if child.Name:match("^BuriedSupplies") then
+				table.insert(entries, child)
+			end
+		end
+		return entries
+	end
+
+	local function walk(node)
+		for _, child in node:GetChildren() do
+			if child:IsA("BasePart") or child:IsA("Model") then
+				table.insert(entries, child)
+			elseif child:IsA("Folder") then
+				walk(child)
+			end
+		end
+	end
+	walk(container)
+	return entries
+end
+
+local function setsEqual(a, b)
+	for k in pairs(a) do if not b[k] then return false end end
+	for k in pairs(b) do if not a[k] then return false end end
+	return true
+end
+
+--=====================================================================
+-- notifications
+--=====================================================================
+if PlayerGui:FindFirstChild("SpawnedItemsMonitor") then
+	PlayerGui.SpawnedItemsMonitor:Destroy()
+end
+if PlayerGui:FindFirstChild("SIM_Notifications") then
+	PlayerGui.SIM_Notifications:Destroy()
+end
+
+local notifGui = Instance.new("ScreenGui")
+notifGui.Name         = "SIM_Notifications"
+notifGui.ResetOnSpawn = false
+notifGui.DisplayOrder = 1000
+notifGui.Parent       = PlayerGui
+
+local notifFrame = Instance.new("Frame")
+notifFrame.AnchorPoint = Vector2.new(0.5, 0)
+notifFrame.Position    = UDim2.new(0.5, 0, 0, 20)
+notifFrame.Size        = UDim2.new(0, 700, 0, 0)
+notifFrame.AutomaticSize = Enum.AutomaticSize.Y
+notifFrame.BackgroundTransparency = 1
+notifFrame.Parent      = notifGui
+
+local notifLayout = Instance.new("UIListLayout")
+notifLayout.Padding             = UDim.new(0, 4)
+notifLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+notifLayout.SortOrder           = Enum.SortOrder.LayoutOrder
+notifLayout.Parent              = notifFrame
+
+local notifCounter = 0
+local lastNotifTime = {}
+
+local function notifySpawn(item, tabName)
+	local name = getDisplayName(item, tabName)
+	local now = os.clock()
+	
+	if lastNotifTime[name] and (now - lastNotifTime[name]) < 2 then
+		return
+	end
+	lastNotifTime[name] = now
+
+	notifCounter += 1
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 0, 40)
+	label.BackgroundTransparency = 1
+	if tabName == "Cases" then
+		label.Text = name .. " detected!"
+	else
+		label.Text = name .. " spawned!"
+	end
+	label.TextColor3 = Color3.new(1, 1, 1)
+	label.TextStrokeColor3 = Color3.new(0, 0, 0)
+	label.TextStrokeTransparency = 1
+	label.TextTransparency = 1
+	label.Font = Enum.Font.GothamBlack
+	label.TextSize = 28
+	label.LayoutOrder = notifCounter
+	label.Parent = notifFrame
+
+	TweenService:Create(label, TweenInfo.new(0.2), {
+		TextTransparency = 0, TextStrokeTransparency = 0,
+	}):Play()
+
+	task.delay(2.5, function()
+		if not label or not label.Parent then return end
+		TweenService:Create(label, TweenInfo.new(0.6), {
+			TextTransparency = 1, TextStrokeTransparency = 1,
+		}):Play()
+		task.wait(0.7)
+		if label then label:Destroy() end
+	end)
+end
+
+--=====================================================================
+-- highlight + pulsing marker
+--=====================================================================
+local highlights = {}
+
+local function buildMarker(part)
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name           = "SIM_Marker"
+	billboard.Size           = UDim2.fromOffset(220, 220)
+	billboard.AlwaysOnTop    = true
+	billboard.MaxDistance    = 20000
+	billboard.LightInfluence = 0
+	billboard.Adornee        = part
+	billboard.Parent         = part
+
+	local dot = Instance.new("Frame")
+	dot.Size             = UDim2.fromOffset(26, 26)
+	dot.Position         = UDim2.fromOffset(97, 97)
+	dot.BackgroundColor3 = HL_FILL
+	dot.BorderSizePixel  = 0
+	dot.Parent           = billboard
+	corner(dot, 13)
+	local dotStroke = Instance.new("UIStroke")
+	dotStroke.Color = HL_OUTLINE; dotStroke.Thickness = 3
+	dotStroke.Parent = dot
+
+	local ring = Instance.new("Frame")
+	ring.Size                   = UDim2.fromOffset(26, 26)
+	ring.Position               = UDim2.fromOffset(97, 97)
+	ring.BackgroundTransparency = 1
+	ring.BorderSizePixel        = 0
+	ring.BackgroundColor3       = HL_FILL
+	ring.Parent                 = billboard
+	corner(ring, 13)
+	local ringStroke = Instance.new("UIStroke")
+	ringStroke.Color = HL_OUTLINE; ringStroke.Thickness = 3
+	ringStroke.Transparency = 0
+	ringStroke.Parent = ring
+
+	task.spawn(function()
+		while billboard.Parent do
+			ring.Size     = UDim2.fromOffset(26, 26)
+			ring.Position = UDim2.fromOffset(97, 97)
+			ringStroke.Transparency = 0
+			TweenService:Create(ring, TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Size = UDim2.fromOffset(210, 210), Position = UDim2.fromOffset(5, 5),
+			}):Play()
+			TweenService:Create(ringStroke, TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Transparency = 1,
+			}):Play()
+			task.wait(1.6)
+		end
+	end)
+
+	return billboard
+end
+
+local function applyHighlight(item, part)
+	if highlights[item] then return end
+	local adorn = getAdornee(item, part)
+	if not adorn or not part then return end
+
+	local hl = Instance.new("Highlight")
+	hl.Name                = "SIM_Highlight"
+	hl.FillColor           = HL_FILL
+	hl.FillTransparency    = 0.15
+	hl.OutlineColor        = HL_OUTLINE
+	hl.OutlineTransparency = 0
+	hl.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
+	hl.Adornee             = adorn
+	hl.Parent              = adorn
+
+	highlights[item] = { highlight = hl, marker = buildMarker(part) }
+end
+
+local function clearHighlight(item)
+	local data = highlights[item]
+	if not data then return end
+	if data.highlight then data.highlight:Destroy() end
+	if data.marker    then data.marker:Destroy()    end
+	highlights[item] = nil
+end
+
+--=====================================================================
+-- teleport / return
+--=====================================================================
+local savedPosition = nil
+
+LocalPlayer.CharacterAdded:Connect(function()
+	savedPosition = nil
+end)
+
+local function teleportToItem(item)
+	local part = getPart(item)
+	if not part then return false, "Item has no BasePart." end
+	local char = LocalPlayer.Character
+	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return false, "Character not available." end
+	if not savedPosition then savedPosition = hrp.CFrame end
+	hrp.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
+	Camera.CameraType = Enum.CameraType.Custom
+	return true
+end
+
+local function returnToSaved()
+	if not savedPosition then return false, "No saved position." end
+	local char = LocalPlayer.Character
+	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return false, "Character not available." end
+	hrp.CFrame = savedPosition
+	savedPosition = nil
+	return true
+end
+
+--=====================================================================
+-- GUI shell
+--=====================================================================
+local gui = Instance.new("ScreenGui")
+gui.Name         = "SpawnedItemsMonitor"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+gui.Parent       = PlayerGui
+
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size              = UDim2.fromOffset(34, 34)
+toggleBtn.Position          = UDim2.new(1, -44, 0, 44)
+toggleBtn.Text              = "SI"
+toggleBtn.Font              = Enum.Font.GothamBold
+toggleBtn.TextSize          = 12
+toggleBtn.TextColor3        = C_TEXT
+toggleBtn.BackgroundColor3  = C_ACCENT
+toggleBtn.BackgroundTransparency = 0.2
+toggleBtn.Visible           = false
+toggleBtn.Parent            = gui
+corner(toggleBtn, 17)
+
+local main = Instance.new("Frame")
+main.Name             = "Main"
+main.Position         = UDim2.fromOffset(16, 90)
+main.Size             = UDim2.fromOffset(480, 460)
+main.BackgroundColor3 = C_BG
+main.BorderSizePixel  = 0
+main.ClipsDescendants = true -- PREVENTS Z-FIGHTING
+main.Parent           = gui
+corner(main, 10)
+
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color     = Color3.fromRGB(60, 65, 75)
+mainStroke.Thickness = 1
+mainStroke.Parent    = main
+
+-- header --------------------------------------------------------------
+local header = Instance.new("Frame")
+header.Name             = "Header"
+header.Size             = UDim2.new(1, 0, 0, 36)
+header.BackgroundColor3 = C_PANEL
+header.BorderSizePixel  = 0
+header.Active           = false
+header.ZIndex           = 10 -- KEEPS HEADER ON TOP WHEN SHRINKING
+header.Parent           = main
+corner(header, 10)
+
+local title = Instance.new("TextLabel")
+title.Text              = "Dashboard"
+title.Font              = Enum.Font.GothamBold
+title.TextSize          = 14
+title.TextColor3        = C_TEXT
+title.BackgroundTransparency = 1
+title.Position          = UDim2.fromOffset(12, 0)
+title.Size              = UDim2.fromOffset(100, 36)
+title.TextXAlignment    = Enum.TextXAlignment.Left
+title.Active            = false
+title.ZIndex            = 10
+title.Parent            = header
+
+local countLabel = Instance.new("TextLabel")
+countLabel.Text             = "0"
+countLabel.Font             = Enum.Font.GothamBold
+countLabel.TextSize         = 11
+countLabel.TextColor3       = C_TEXT
+countLabel.BackgroundColor3 = C_ACCENT
+countLabel.BackgroundTransparency = 0.2
+countLabel.Size             = UDim2.fromOffset(40, 22)
+countLabel.Position         = UDim2.fromOffset(100, 7)
+countLabel.Active           = false
+countLabel.ZIndex           = 10
+countLabel.Parent           = header
+corner(countLabel, 6)
+
+local minBtn = Instance.new("TextButton")
+minBtn.Text              = "—"
+minBtn.Font              = Enum.Font.GothamBold
+minBtn.TextSize          = 16
+minBtn.TextColor3        = C_SUB
+minBtn.BackgroundTransparency = 1
+minBtn.Size              = UDim2.fromOffset(28, 28)
+minBtn.Position          = UDim2.new(1, -66, 0.5, -14)
+minBtn.ZIndex            = 10
+minBtn.Parent            = header
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Text              = "×"
+closeBtn.Font              = Enum.Font.GothamBold
+closeBtn.TextSize          = 20
+closeBtn.TextColor3        = C_ERR
+closeBtn.BackgroundTransparency = 1
+closeBtn.Size              = UDim2.fromOffset(28, 28)
+closeBtn.Position          = UDim2.new(1, -34, 0.5, -14)
+closeBtn.ZIndex            = 10
+closeBtn.Parent            = header
+
+-- Left Sidebar (tab bar) ----------------------------------------------
+local tabBar = Instance.new("Frame")
+tabBar.Name             = "TabBar"
+tabBar.Position         = UDim2.fromOffset(0, 36)
+tabBar.Size             = UDim2.new(0, 140, 1, -80)
+tabBar.BackgroundColor3 = C_BG
+tabBar.BorderSizePixel  = 0
+tabBar.Parent           = main
+
+local tabList = Instance.new("UIListLayout")
+tabList.FillDirection       = Enum.FillDirection.Vertical
+tabList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+tabList.VerticalAlignment   = Enum.VerticalAlignment.Top
+tabList.Padding             = UDim.new(0, 6)
+tabList.Parent              = tabBar
+
+local tabPad = Instance.new("UIPadding")
+tabPad.PaddingTop = UDim.new(0, 10)
+tabPad.Parent = tabBar
+
+-- Improved Gradient Separator -----------------------------------------
+local separator = Instance.new("Frame")
+separator.Size = UDim2.new(0, 1, 1, -36) -- Stretches all the way to bottom
+separator.Position = UDim2.fromOffset(140, 36)
+separator.BackgroundColor3 = Color3.fromRGB(40, 43, 50)
+separator.BorderSizePixel = 0
+separator.Parent = main
+
+local sepGradient = Instance.new("UIGradient")
+sepGradient.Color = ColorSequence.new{
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 33, 38)), -- Fades top
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(60, 65, 75)), -- Bright middle
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 33, 38))  -- Fades bottom
+}
+sepGradient.Rotation = 90
+sepGradient.Parent = separator
+
+-- footer -------------------------------------------------------------
+local footer = Instance.new("Frame")
+footer.Name                    = "Footer"
+footer.Position                = UDim2.new(0, 0, 1, -44)
+footer.Size                    = UDim2.new(1, 0, 0, 44)
+footer.BackgroundTransparency  = 1
+footer.BorderSizePixel         = 0
+footer.Parent                  = main
+
+local returnBtn = Instance.new("TextButton")
+returnBtn.Text             = "Return"
+returnBtn.Font             = Enum.Font.GothamBold
+returnBtn.TextSize         = 12
+returnBtn.TextColor3       = C_TEXT
+returnBtn.BackgroundColor3 = C_PANEL
+returnBtn.BorderSizePixel  = 0
+returnBtn.Position         = UDim2.fromOffset(150, 7)
+returnBtn.Size             = UDim2.new(1, -160, 0, 30)
+returnBtn.Parent           = footer
+corner(returnBtn, 6)
+
+--=====================================================================
+-- tab configs
+--=====================================================================
+local tabs = {
+	{
+		name          = "Items",
+		emptyText     = "No items spawned",
+		autoHighlight = true,
+		notify        = true,
+		getContainer  = function()
+			local g = workspace:FindFirstChild("Game")
+			return g and g:FindFirstChild("SpawnedItems")
+		end,
+	},
+	{
+		name          = "Supplies",
+		emptyText     = "No supplies spawned",
+		autoHighlight = false,
+		notify        = true,
+		getContainer  = function()
+			local g    = workspace:FindFirstChild("Game")
+			local gar  = g and g:FindFirstChild("Gardening")
+			return gar and gar:FindFirstChild("Foraging")
+		end,
+	},
+	{
+		name          = "Cases",
+		emptyText     = "No cases found.",
+		autoHighlight = false,
+		notify        = true,
+		getContainer  = function()
+			return caseBeaconFolder
+		end,
+	},
+	{
+		name          = "Teleports",
+		emptyText     = "No teleports available.",
+		autoHighlight = false,
+		notify        = false,
+		getContainer  = function()
+			return teleportBeaconFolder
+		end,
+	},
+}
+
+local function buildTabBtn(tab, index, parentFrame)
+	local btn = Instance.new("TextButton")
+	btn.Text             = tab.name
+	btn.Font             = Enum.Font.Gotham
+	btn.TextSize         = 12
+	btn.TextColor3       = C_SUB
+	btn.BackgroundColor3 = C_BG
+	btn.BorderSizePixel  = 0
+	btn.LayoutOrder      = index
+	btn.TextXAlignment   = Enum.TextXAlignment.Center
+	btn.Size             = UDim2.new(1, -40, 0, 28)
+	btn.Parent           = parentFrame
+	corner(btn, 6)
+	return btn
+end
+
+local function buildTabBody(tab, parentFrame)
+	local body = Instance.new("Frame")
+	body.Position              = UDim2.fromOffset(140, 36)
+	body.Size                  = UDim2.new(1, -140, 1, -80)
+	body.BackgroundTransparency= 1
+	body.Visible               = false
+	body.Parent                = parentFrame
+
+	local search = Instance.new("TextBox")
+	search.PlaceholderText   = "Filter by name..."
+	search.Text              = ""
+	search.ClearTextOnFocus  = false
+	search.Font              = Enum.Font.Gotham
+	search.TextSize          = 12
+	search.TextColor3        = C_TEXT
+	search.PlaceholderColor3 = C_SUB
+	search.BackgroundColor3  = C_PANEL
+	search.BorderSizePixel   = 0
+	search.Position          = UDim2.fromOffset(10, 10)
+	search.Size              = UDim2.new(1, -20, 0, 26)
+	search.TextXAlignment    = Enum.TextXAlignment.Left
+	search.Parent            = body
+	corner(search, 6)
+	local sp = Instance.new("UIPadding"); sp.PaddingLeft = UDim.new(0, 8); sp.Parent = search
+
+	local status = Instance.new("TextLabel")
+	status.Text              = ""
+	status.Font              = Enum.Font.Gotham
+	status.TextSize          = 11
+	status.TextColor3        = C_SUB
+	status.BackgroundTransparency = 1
+	status.TextXAlignment    = Enum.TextXAlignment.Left
+	status.Position          = UDim2.fromOffset(12, 40)
+	status.Size              = UDim2.new(1, -24, 0, 16)
+	status.Parent            = body
+
+	local scroll = Instance.new("ScrollingFrame")
+	scroll.Position              = UDim2.fromOffset(10, 60)
+	scroll.Size                  = UDim2.new(1, -20, 1, -70)
+	scroll.BackgroundTransparency= 1
+	scroll.BorderSizePixel       = 0
+	scroll.ScrollBarThickness    = 5
+	scroll.ScrollBarImageColor3  = Color3.fromRGB(90, 96, 110)
+	scroll.AutomaticCanvasSize   = Enum.AutomaticSize.Y
+	scroll.CanvasSize            = UDim2.new()
+	scroll.Parent                = body
+
+	local ll = Instance.new("UIListLayout")
+	ll.Padding = UDim.new(0, 4); ll.SortOrder = Enum.SortOrder.LayoutOrder
+	ll.Parent = scroll
+	local lp = Instance.new("UIPadding")
+	lp.PaddingRight = UDim.new(0, 4); lp.Parent = scroll
+
+	local empty = Instance.new("TextLabel")
+	empty.Text              = tab.emptyText
+	empty.Font              = Enum.Font.Gotham
+	empty.TextSize          = 12
+	empty.TextColor3        = C_SUB
+	empty.BackgroundTransparency = 1
+	empty.TextWrapped       = true
+	empty.Position          = UDim2.fromOffset(10, 60)
+	empty.Size              = UDim2.new(1, -20, 1, -70)
+	empty.Visible           = false
+	empty.Parent            = body
+
+	tab.body   = body
+	tab.search = search
+	tab.status = status
+	tab.scroll = scroll
+	tab.empty  = empty
+end
+
+for i, tab in ipairs(tabs) do
+	tab.tabBtn = buildTabBtn(tab, i - 1, tabBar)
+	buildTabBody(tab, main)
+end
+
+--=====================================================================
+-- manager factory
+--=====================================================================
+local activeTab
+local updateCountLabel = function() end
+
+local function createManager(tab)
+	local state = {
+		rows = {}, addedConn = nil, removedConn = nil,
+		lastContainer = nil, lastItemSet = {}, knownItems = {},
+		initialized = false, rebuildQueued = false, shownCount = 0,
+	}
+	tab.state = state
+
+	local function matchesFilter(item)
+		local q = string.lower(tab.search.Text)
+		if q == "" then return true end
+		return string.find(string.lower(getDisplayName(item, tab.name)), q, 1, true) ~= nil
+	end
+
+	local function createRow(item, order)
+		local part        = getPart(item)
+		local displayName = getDisplayName(item, tab.name)
+
+		local rightMargin = -8
+		local hasHL   = not tab.autoHighlight
+		local hasCopy = (tab.name == "Cases" or tab.name == "Teleports")
+
+		if hasCopy then rightMargin = rightMargin - 40 - 6 end
+		if hasHL   then rightMargin = rightMargin - 34 - 6 end
+		rightMargin = rightMargin - 58 - 8
+
+		local row = Instance.new("Frame")
+		row.Size             = UDim2.new(1, 0, 0, 46)
+		row.BackgroundColor3 = C_ROW
+		row.BorderSizePixel  = 0
+		row.LayoutOrder      = order
+		row.Parent           = tab.scroll
+		corner(row, 6)
+
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Position       = UDim2.fromOffset(8, 4)
+		nameLabel.Size           = UDim2.new(1, rightMargin, 0, 16)
+		nameLabel.Font           = Enum.Font.GothamMedium
+		nameLabel.TextSize       = 12
+		nameLabel.TextColor3     = C_TEXT
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.TextTruncate   = Enum.TextTruncate.AtEnd
+		nameLabel.Text           = displayName
+		nameLabel.Parent         = row
+
+		local info = Instance.new("TextLabel")
+		info.BackgroundTransparency = 1
+		info.Position       = UDim2.fromOffset(8, 22)
+		info.Size           = UDim2.new(1, rightMargin, 0, 16)
+		info.Font           = Enum.Font.Code
+		info.TextSize       = 11
+		info.TextColor3     = C_SUB
+		info.TextXAlignment = Enum.TextXAlignment.Left
+		info.TextTruncate   = Enum.TextTruncate.AtEnd
+		info.Text           = "Calculating..."
+		info.Parent         = row
+
+		local tp = Instance.new("TextButton")
+		tp.Text             = "Teleport"
+		tp.Font             = Enum.Font.GothamBold
+		tp.TextSize         = 11
+		tp.TextColor3       = Color3.new(1, 1, 1)
+		-- White text pop
+		tp.TextStrokeColor3 = Color3.new(0, 0, 0)
+		tp.TextStrokeTransparency = 0.5
+		
+		tp.BackgroundColor3 = part and C_ACCENT or C_ROW_HOT
+		tp.BorderSizePixel  = 0
+		tp.Position         = UDim2.new(1, -66, 0.5, -14)
+		tp.Size             = UDim2.fromOffset(58, 28)
+		tp.Parent           = row
+		corner(tp, 5)
+
+		local hlBtn
+		if hasHL then
+			hlBtn = Instance.new("TextButton")
+			hlBtn.Text             = "HL"
+			hlBtn.Font             = Enum.Font.GothamBold
+			hlBtn.TextSize         = 11
+			hlBtn.TextColor3       = C_TEXT
+			hlBtn.BackgroundColor3 = highlights[item] and C_ACCENT or C_ROW_HOT
+			hlBtn.BorderSizePixel  = 0
+			hlBtn.Position         = UDim2.new(1, -108, 0.5, -14)
+			hlBtn.Size             = UDim2.fromOffset(34, 28)
+			hlBtn.Parent           = row
+			corner(hlBtn, 5)
+
+			hlBtn.MouseButton1Click:Connect(function()
+				if highlights[item] then
+					clearHighlight(item)
+					hlBtn.BackgroundColor3 = C_ROW_HOT
+				elseif part and part:IsDescendantOf(workspace) then
+					applyHighlight(item, part)
+					hlBtn.BackgroundColor3 = C_ACCENT
+				end
+			end)
+		end
+
+		if hasCopy then
+			local copyBtn = Instance.new("TextButton")
+			copyBtn.Text             = "Copy"
+			copyBtn.Font             = Enum.Font.GothamBold
+			copyBtn.TextSize         = 11
+			copyBtn.TextColor3       = C_TEXT
+			copyBtn.BackgroundColor3 = C_PANEL
+			copyBtn.BorderSizePixel  = 0
+			copyBtn.Position         = UDim2.new(1, -148, 0.5, -14)
+			copyBtn.Size             = UDim2.fromOffset(34, 28)
+			copyBtn.Parent           = row
+			corner(copyBtn, 5)
+
+			copyBtn.MouseButton1Click:Connect(function()
+				if part then
+					local pos = part.Position
+					local text = string.format("%.2f, %.2f, %.2f", pos.X, pos.Y, pos.Z)
+					if setclipboard then
+						pcall(setclipboard, text)
+						copyBtn.Text = "✓"
+						copyBtn.TextColor3 = C_OK
+						task.delay(1.5, function()
+							if copyBtn and copyBtn.Parent then
+								copyBtn.Text = "Copy"
+								copyBtn.TextColor3 = C_TEXT
+							end
+						end)
+					else
+						tab.status.Text = "Clipboard not supported."
+						tab.status.TextColor3 = C_ERR
+					end
+				end
+			end)
+		end
+
+		row.MouseEnter:Connect(function() row.BackgroundColor3 = C_ROW_HOT end)
+		row.MouseLeave:Connect(function() row.BackgroundColor3 = C_ROW end)
+
+		tp.MouseButton1Click:Connect(function()
+			if not item:IsDescendantOf(workspace) then
+				tab.status.Text = "Item no longer exists."
+				tab.status.TextColor3 = C_ERR
+				return
+			end
+			local ok, err = teleportToItem(item)
+			if ok then
+				tab.status.Text       = "Teleported to: " .. displayName
+				tab.status.TextColor3 = C_OK
+			else
+				tab.status.Text       = err
+				tab.status.TextColor3 = C_ERR
+			end
+		end)
+
+		state.rows[item] = { frame = row, info = info, tp = tp, hl = hlBtn, part = part }
+	end
+
+	local function clearRows()
+		for _, data in pairs(state.rows) do
+			if data.frame then data.frame:Destroy() end
+		end
+		state.rows = {}
+	end
+
+	local function rebuild()
+		clearRows()
+
+		local container = tab.getContainer()
+		if container ~= state.lastContainer then
+			if state.addedConn   then state.addedConn:Disconnect();   state.addedConn   = nil end
+			if state.removedConn then state.removedConn:Disconnect(); state.removedConn = nil end
+			state.lastContainer = container
+			if container then
+				local function queue(child)
+					if child and (child.Name == "SIM_Marker" or child.Name == "SIM_Highlight") then return end
+					
+					if state.rebuildQueued then return end
+					state.rebuildQueued = true
+					task.defer(function()
+						state.rebuildQueued = false
+						rebuild()
+					end)
+				end
+				state.addedConn   = container.DescendantAdded:Connect(queue)
+				state.removedConn = container.DescendantRemoving:Connect(queue)
+			end
+		end
+
+		if not container then
+			state.shownCount = 0
+			tab.status.Text       = "Waiting"
+			tab.status.TextColor3 = C_SUB
+			tab.empty.Text        = tab.emptyText
+			tab.empty.Visible     = true
+			for item in pairs(state.knownItems) do clearHighlight(item) end
+			state.knownItems  = {}
+			state.lastItemSet = {}
+			if tab == activeTab then updateCountLabel() end
+			return
+		end
+
+		local entries = collectEntries(container, tab.name)
+		table.sort(entries, function(a, b)
+			return string.lower(getDisplayName(a, tab.name)) < string.lower(getDisplayName(b, tab.name))
+		end)
+
+		local currentAll = {}
+		for _, item in ipairs(entries) do currentAll[item] = true end
+
+		if state.initialized and tab.notify then
+			for item in pairs(currentAll) do
+				if not state.knownItems[item] then notifySpawn(item, tab.name) end
+			end
+		end
+
+		for item in pairs(state.knownItems) do
+			if not currentAll[item] then clearHighlight(item) end
+		end
+
+		state.knownItems  = currentAll
+		state.lastItemSet = currentAll
+		state.initialized = true
+
+		if tab.autoHighlight then
+			for item in pairs(currentAll) do
+				if not highlights[item] then
+					local p = getPart(item)
+					if p then applyHighlight(item, p) end
+				end
+			end
+		end
+
+		local shown = 0
+		
+		-- Custom Rendering for Teleports (Grouped)
+		if tab.name == "Teleports" then
+			local groups = {
+				["Miscellaneous"] = {},
+				["Raids"] = {}
+			}
+			
+			for _, item in ipairs(entries) do
+				local group = item:GetAttribute("Group") or "Miscellaneous"
+				if groups[group] then
+					table.insert(groups[group], item)
+				end
+			end
+
+			local function renderGroup(groupName, list)
+				if #list == 0 then return end
+				
+				shown += 1
+				local header = Instance.new("TextLabel")
+				header.Size = UDim2.new(1, 0, 0, 28)
+				header.BackgroundTransparency = 1
+				header.Text = groupName
+				header.Font = Enum.Font.GothamBold
+				header.TextSize = 12
+				header.TextColor3 = C_ACCENT
+				header.TextXAlignment = Enum.TextXAlignment.Left
+				header.LayoutOrder = shown
+				header.Parent = tab.scroll
+				
+				local pad = Instance.new("UIPadding")
+				pad.PaddingLeft = UDim.new(0, 8)
+				pad.Parent = header
+				
+				table.sort(list, function(a, b)
+					return (a:GetAttribute("Order") or 0) < (b:GetAttribute("Order") or 0)
+				end)
+				
+				for _, item in ipairs(list) do
+					shown += 1
+					createRow(item, shown)
+				end
+			end
+
+			renderGroup("Miscellaneous", groups["Miscellaneous"])
+			renderGroup("Raids", groups["Raids"])
+			
+		else
+			-- Standard rendering
+			for _, item in ipairs(entries) do
+				if matchesFilter(item) then
+					shown += 1
+					createRow(item, shown)
+				end
+			end
+		end
+
+		state.shownCount = shown
+		if tab == activeTab then updateCountLabel() end
+
+		if shown == 0 then
+			tab.empty.Text    = (#entries == 0) and tab.emptyText or "No items match the filter."
+			tab.empty.Visible = true
+			tab.status.Text   = (#entries == 0) and "Waiting" or "Filter active"
+			tab.status.TextColor3 = C_SUB
+		else
+			tab.empty.Visible = false
+			tab.status.Text   = ""
+		end
+	end
+
+	tab.rebuild = rebuild
+	tab.getItemSet = function(cont)
+		local set = {}
+		if not cont then return set end
+		for _, item in ipairs(collectEntries(cont, tab.name)) do set[item] = true end
+		return set
+	end
+end
+
+for _, tab in ipairs(tabs) do createManager(tab) end
+
+--=====================================================================
+-- tab switching & dynamic counts
+--=====================================================================
+updateCountLabel = function()
+	if not activeTab then return end
+	local count = activeTab.state.shownCount or 0
+	
+	if activeTab.name == "Items" then
+		countLabel.Text = count .. " spawned"
+		countLabel.Size = UDim2.fromOffset(75, 22)
+	elseif activeTab.name == "Supplies" then
+		countLabel.Text = count .. " spawned"
+		countLabel.Size = UDim2.fromOffset(75, 22)
+	elseif activeTab.name == "Cases" then
+		countLabel.Text = count .. " found"
+		countLabel.Size = UDim2.fromOffset(70, 22)
+	else
+		countLabel.Text = "Total: " .. count
+		countLabel.Size = UDim2.fromOffset(60, 22)
+	end
+end
+
+local function showTab(tab)
+	activeTab = tab
+	for _, t in ipairs(tabs) do
+		local isSelected = (t == tab)
+		t.body.Visible = isSelected
+		
+		t.tabBtn.BackgroundColor3 = isSelected and C_PANEL or C_BG
+		t.tabBtn.TextColor3       = isSelected and C_TEXT   or C_SUB
+		t.tabBtn.Font             = isSelected and Enum.Font.GothamBold or Enum.Font.Gotham
+		
+		TweenService:Create(t.tabBtn, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = isSelected and UDim2.new(1, -20, 0, 36) or UDim2.new(1, -40, 0, 28)
+		}):Play()
+	end
+	updateCountLabel()
+end
+
+for _, tab in ipairs(tabs) do
+	tab.tabBtn.MouseButton1Click:Connect(function() showTab(tab) end)
+end
+
+--=====================================================================
+-- return + minimize/close + drag
+--=====================================================================
+returnBtn.MouseButton1Click:Connect(function()
+	local ok, err = returnToSaved()
+	if activeTab then
+		if ok then
+			activeTab.status.Text = "Returned to your saved position."
+			activeTab.status.TextColor3 = C_SUB
+		else
+			activeTab.status.Text = err
+			activeTab.status.TextColor3 = C_WARN
+		end
+	end
+end)
+
+do
+	local dragging, dragStart, startPos
+	header.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+			dragging  = true
+			dragStart = input.Position
+			startPos  = main.Position
+		end
+	end)
+	header.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragging then return end
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch then
+			local d = input.Position - dragStart
+			main.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + d.X,
+				startPos.Y.Scale, startPos.Y.Offset + d.Y
+			)
+		end
+	end)
+end
+
+local minimized     = false
+local expandedSize  = UDim2.fromOffset(480, 460)
+local collapsedSize = UDim2.fromOffset(480, 36)
+
+minBtn.MouseButton1Click:Connect(function()
+	minimized = not minimized
+	minBtn.Text = minimized and "+" or "—"
+	
+	if minimized then
+		-- Hide contents instantly before shrinking (fixes Z-fighting)
+		tabBar.Visible = false
+		separator.Visible = false
+		footer.Visible = false
+		for _, t in ipairs(tabs) do t.body.Visible = false end
+		
+		TweenService:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = collapsedSize
+		}):Play()
+	else
+		TweenService:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Size = expandedSize
+		}):Play()
+		
+		task.delay(0.2, function()
+			if not minimized then
+				tabBar.Visible = true
+				separator.Visible = true
+				footer.Visible = true
+				if activeTab then activeTab.body.Visible = true end
+			end
+		end)
+	end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	main.Visible = false
+	toggleBtn.Visible = true
+end)
+
+toggleBtn.MouseButton1Click:Connect(function()
+	main.Visible = true
+	toggleBtn.Visible = false
+end)
+
+--=====================================================================
+-- filter changes
+--=====================================================================
+for _, tab in ipairs(tabs) do
+	tab.search:GetPropertyChangedSignal("Text"):Connect(function()
+		task.defer(tab.rebuild)
+	end)
+end
+
+--=====================================================================
+-- poll: rebuild only when item set changes
+--=====================================================================
+task.spawn(function()
+	while true do
+		task.wait(AUTO_REFRESH)
+		for _, tab in ipairs(tabs) do
+			if tab.state.rebuildQueued then continue end
+			local container = tab.getContainer()
+			if container ~= tab.state.lastContainer then
+				tab.rebuild()
+			else
+				local currentSet = tab.getItemSet(container)
+				if not setsEqual(currentSet, tab.state.lastItemSet) then
+					tab.rebuild()
+				end
+			end
+		end
+	end
+end)
+
+--=====================================================================
+-- heartbeat: live studs text + fast container poll
+--=====================================================================
+local textAcc, pollAcc = 0, 0
+
+local function playerPosition()
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	return root and root.Position or nil
+end
+
+RunService.Heartbeat:Connect(function(dt)
+	pollAcc += dt
+	if pollAcc >= POLL_RATE then
+		pollAcc = 0
+		for _, tab in ipairs(tabs) do
+			if tab.getContainer() ~= tab.state.lastContainer then
+				tab.rebuild()
+			end
+		end
+	end
+
+	textAcc += dt
+	if textAcc < 1 / TEXT_HZ then return end
+	textAcc = 0
+
+	local ppos = playerPosition()
+	for _, tab in ipairs(tabs) do
+		for item, data in pairs(tab.state.rows) do
+			local p = data.part
+			if p and p:IsDescendantOf(workspace) then
+				local pos = p.Position
+				local txt = "Unknown distance"
+				if ppos then
+					txt = string.format("%d studs", math.round((pos - ppos).Magnitude))
+				end
+				data.info.Text = txt
+				data.tp.BackgroundColor3 = C_ACCENT
+			else
+				data.info.Text = "No BasePart found"
+				data.tp.BackgroundColor3 = C_ROW_HOT
+			end
+		end
+	end
+end)
+
+--=====================================================================
+-- go
+--=====================================================================
+showTab(tabs[1])
+for _, tab in ipairs(tabs) do tab.rebuild() end
