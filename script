@@ -1,11 +1,8 @@
 --!nocheck
 --=====================================================================
--- Stand Out Dashboard v37.1 (Xeno Compatible)
---   * Fixed Xeno crash: Removed Enum.PlaybackState dependency
---   * REWRITTEN Auto Collect: TP + Tween now verified end-to-end
---   * Fixed scrap radar "tabs scope" bug + debounced updates
---   * Fixed rebuildQueued double-firing bug
---   * Softer purple for multi-dropdown checkbox fill
+-- Stand Out Dashboard v40
+--   * Fixed Case sorting (1 to 10 numerical)
+--   * Renamed "Meteors" tab to "World Events"
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -20,9 +17,6 @@ local Camera      = workspace.CurrentCamera
 local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 
 local TEXT_HZ             = 8
-local POLL_RATE           = 0.5
-local AUTO_REFRESH        = 4
-local TWEEN_DURATION      = 0.5
 local COLLECT_MAX_TRIES   = 5
 local COLLECT_RETRY_DELAY = 1.2
 local TELEPORT_SETTLE     = 0.5
@@ -60,6 +54,8 @@ local STATIC_CASES = {
 	Vector3.new(-1846.07, 16.03, 1206.89), -- 6
 	Vector3.new(-2248.65, 14.63, 823.82),  -- 7
 	Vector3.new(185.34, 17.44, 1717.25),   -- 8
+	Vector3.new(179.49, 17.44, 1045.49),   -- 9
+	Vector3.new(2378.16, 25.62, 1325.02),  -- 10
 }
 
 local STATIC_TELEPORTS = {
@@ -71,7 +67,6 @@ local STATIC_TELEPORTS = {
 	{Label = "Swat Car", Pos = Vector3.new(-457, 19, 1578), Group = "Raids", Order = 5},
 }
 
--- Generate invisible beacon parts
 local caseBeaconFolder = Instance.new("Folder")
 caseBeaconFolder.Name = "SIM_CaseBeacons"
 caseBeaconFolder.Parent = workspace
@@ -105,11 +100,13 @@ for _, data in ipairs(STATIC_TELEPORTS) do
 end
 
 --=====================================================================
--- Scrap Barges Radar
+-- Scrap Barges Radar (Optimized Event-Driven)
 --=====================================================================
 local scrapBeaconFolder = Instance.new("Folder")
 scrapBeaconFolder.Name = "SIM_ScrapBeacons"
 scrapBeaconFolder.Parent = workspace
+
+local scrapPieces = {}
 
 local function updateScrapBeacons()
 	local gameFolder = workspace:FindFirstChild("Game")
@@ -119,27 +116,23 @@ local function updateScrapBeacons()
 		return
 	end
 
-	local pieces = {}
-	for _, obj in ipairs(mapFolder:GetDescendants()) do
-		if obj.Name == "DebrisPiece" then
-			local pos = obj:IsA("Model") and obj:GetPivot().Position or (obj:IsA("BasePart") and obj.Position)
-			if pos then
-				table.insert(pieces, {object = obj, position = pos})
-			end
+	for obj in pairs(scrapPieces) do
+		if not obj:IsDescendantOf(workspace) then
+			scrapPieces[obj] = nil
 		end
 	end
 
 	local groups = {}
-	for _, piece in ipairs(pieces) do
+	for obj, pos in pairs(scrapPieces) do
 		local found = false
 		for _, g in ipairs(groups) do
-			if (g.position - piece.position).Magnitude <= 15 then
+			if (g.position - pos).Magnitude <= 15 then
 				found = true
 				break
 			end
 		end
 		if not found then
-			table.insert(groups, piece)
+			table.insert(groups, {object = obj, position = pos})
 		end
 	end
 
@@ -175,7 +168,7 @@ local scrapUpdateScheduled = false
 local function scheduleScrapUpdate()
 	if scrapUpdateScheduled then return end
 	scrapUpdateScheduled = true
-	task.delay(0.3, function()
+	task.delay(0.4, function()
 		scrapUpdateScheduled = false
 		updateScrapBeacons()
 	end)
@@ -190,13 +183,25 @@ local function setupMapListeners()
 	local mapFolder  = gameFolder and gameFolder:FindFirstChild("Map")
 	if not mapFolder then return false end
 
+	for _, obj in ipairs(mapFolder:GetDescendants()) do
+		if obj.Name == "DebrisPiece" then
+			local pos = obj:IsA("Model") and obj:GetPivot().Position or (obj:IsA("BasePart") and obj.Position)
+			if pos then scrapPieces[obj] = pos end
+		end
+	end
+	scheduleScrapUpdate()
+
 	table.insert(mapListenerConns, mapFolder.DescendantAdded:Connect(function(obj)
 		if obj.Name == "DebrisPiece" then
+			local pos = obj:IsA("Model") and obj:GetPivot().Position or (obj:IsA("BasePart") and obj.Position)
+			if pos then scrapPieces[obj] = pos end
 			scheduleScrapUpdate()
 		end
 	end))
+	
 	table.insert(mapListenerConns, mapFolder.DescendantRemoving:Connect(function(obj)
 		if obj.Name == "DebrisPiece" then
+			scrapPieces[obj] = nil
 			scheduleScrapUpdate()
 			task.delay(0.15, function()
 				if activeTab and activeTab.name == "Scrap Barges" and activeTab.rebuild then
@@ -213,8 +218,7 @@ task.spawn(function()
 		if #mapListenerConns == 0 then
 			setupMapListeners()
 		end
-		scheduleScrapUpdate()   
-		task.wait(15)
+		task.wait(5)   
 	end
 end)
 
@@ -289,7 +293,7 @@ local function corner(parent, r)
 end
 
 local function getDisplayName(item, tabName)
-	if tabName == "Cases" or tabName == "Teleports" or tabName == "Scrap Barges" then
+	if tabName == "Cases" or tabName == "Teleports" or tabName == "Scrap Barges" or tabName == "World Events" then
 		return item.Name
 	end
 
@@ -376,12 +380,6 @@ local function collectEntries(container, tabName)
 	return entries
 end
 
-local function setsEqual(a, b)
-	for k in pairs(a) do if not b[k] then return false end end
-	for k in pairs(b) do if not a[k] then return false end end
-	return true
-end
-
 --=====================================================================
 -- notifications
 --=====================================================================
@@ -461,9 +459,10 @@ local function notifySpawn(item, tabName)
 end
 
 --=====================================================================
--- highlight + pulsing marker
+-- highlight + pulsing marker (Optimized Global Loop)
 --=====================================================================
 local highlights = {}
+local activeMarkers = {}
 
 local function buildMarker(part)
 	local billboard = Instance.new("BillboardGui")
@@ -503,19 +502,34 @@ local function buildMarker(part)
 	local tweenRing = TweenService:Create(ring, tInfo, {Size = UDim2.fromOffset(210, 210), Position = UDim2.fromOffset(5, 5)})
 	local tweenStroke = TweenService:Create(ringStroke, tInfo, {Transparency = 1})
 
-	task.spawn(function()
-		while billboard.Parent do
-			ring.Size     = UDim2.fromOffset(26, 26)
-			ring.Position = UDim2.fromOffset(97, 97)
-			ringStroke.Transparency = 0
-			tweenRing:Play()
-			tweenStroke:Play()
-			task.wait(1.6)
-		end
-	end)
+	table.insert(activeMarkers, {
+		gui = billboard,
+		ring = ring,
+		stroke = ringStroke,
+		tweenRing = tweenRing,
+		tweenStroke = tweenStroke,
+	})
 
 	return billboard
 end
+
+task.spawn(function()
+	while true do
+		task.wait(1.6)
+		for i = #activeMarkers, 1, -1 do
+			local m = activeMarkers[i]
+			if not m.gui.Parent then
+				table.remove(activeMarkers, i)
+			else
+				m.ring.Size = UDim2.fromOffset(26, 26)
+				m.ring.Position = UDim2.fromOffset(97, 97)
+				m.stroke.Transparency = 0
+				m.tweenRing:Play()
+				m.tweenStroke:Play()
+			end
+		end
+	end
+end)
 
 local function applyHighlight(item, part)
 	if highlights[item] then return end
@@ -572,7 +586,7 @@ local function returnToSaved()
 	if not savedPosition then return false, "No saved position." end
 	local char = LocalPlayer.Character
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-	if not hrp then return false, "Character not available." end
+	if not char or not hrp then return false, "Character not available." end
 	hrp.CFrame = savedPosition
 	savedPosition = nil
 	return true
@@ -610,7 +624,6 @@ main.ClipsDescendants = true
 main.Parent           = gui
 corner(main, 10)
 
--- header --------------------------------------------------------------
 local header = Instance.new("Frame")
 header.Name             = "Header"
 header.Size             = UDim2.new(1, 0, 0, 36)
@@ -676,7 +689,6 @@ closeBtn.Position          = UDim2.new(1, -34, 0.5, -14)
 closeBtn.ZIndex            = 10
 closeBtn.Parent            = header
 
--- Left Sidebar (tab bar) ----------------------------------------------
 local tabBar = Instance.new("Frame")
 tabBar.Name             = "TabBar"
 tabBar.Position         = UDim2.fromOffset(0, 36)
@@ -696,7 +708,6 @@ local tabPad = Instance.new("UIPadding")
 tabPad.PaddingTop = UDim.new(0, 10)
 tabPad.Parent = tabBar
 
--- Gradient Separator -----------------------------------------
 local separator = Instance.new("Frame")
 separator.Size = UDim2.new(0, 1, 1, -36)
 separator.Position = UDim2.fromOffset(140, 36)
@@ -713,7 +724,6 @@ sepGradient.Color = ColorSequence.new{
 sepGradient.Rotation = 90
 sepGradient.Parent = separator
 
--- footer -------------------------------------------------------------
 local footer = Instance.new("Frame")
 footer.Name                    = "Footer"
 footer.Position                = UDim2.new(0, 0, 1, -44)
@@ -735,7 +745,7 @@ returnBtn.Parent           = footer
 corner(returnBtn, 6)
 
 --=====================================================================
--- Dropdown Helpers
+-- Dropdown & Slider Helpers
 --=====================================================================
 local function closeAllDropdowns(parent)
 	for _, child in ipairs(parent:GetDescendants()) do
@@ -983,6 +993,108 @@ local function buildMultiDropdown(parent, label, options, position, onChange)
 	end
 end
 
+local function buildSlider(parent, label, minVal, maxVal, defaultVal, position, isInt, onChange)
+	local container = Instance.new("Frame")
+	container.Size = UDim2.new(1, -20, 0, 50)
+	container.Position = position
+	container.BackgroundTransparency = 1
+	container.Parent = parent
+
+	local labelLbl = Instance.new("TextLabel")
+	labelLbl.Text = label
+	labelLbl.Font = Enum.Font.GothamBold
+	labelLbl.TextSize = 11
+	labelLbl.TextColor3 = C_SUB
+	labelLbl.BackgroundTransparency = 1
+	labelLbl.Size = UDim2.new(1, 0, 0, 16)
+	labelLbl.TextXAlignment = Enum.TextXAlignment.Left
+	labelLbl.Parent = container
+
+	local sliderFrame = Instance.new("Frame")
+	sliderFrame.Size = UDim2.new(1, -65, 0, 20)
+	sliderFrame.Position = UDim2.new(0, 0, 0, 18)
+	sliderFrame.BackgroundTransparency = 1
+	sliderFrame.Parent = container
+
+	local track = Instance.new("Frame")
+	track.Size = UDim2.new(1, 0, 0, 6)
+	track.Position = UDim2.new(0, 0, 0.5, -3)
+	track.BackgroundColor3 = C_ROW
+	track.BorderSizePixel = 0
+	track.Parent = sliderFrame
+	corner(track, 3)
+
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.new(0, 0, 1, 0)
+	fill.BackgroundColor3 = C_ACCENT
+	fill.BorderSizePixel = 0
+	fill.Parent = track
+	corner(fill, 3)
+
+	local thumb = Instance.new("Frame")
+	thumb.Size = UDim2.fromOffset(16, 16)
+	thumb.Position = UDim2.new(0, -8, 0.5, -8)
+	thumb.BackgroundColor3 = C_TEXT
+	thumb.BorderSizePixel = 0
+	thumb.Parent = sliderFrame
+	corner(thumb, 8)
+
+	local textBox = Instance.new("TextBox")
+	textBox.Size = UDim2.fromOffset(50, 26)
+	textBox.Position = UDim2.new(1, -55, 0.5, -13)
+	textBox.BackgroundColor3 = C_PANEL
+	textBox.TextColor3 = C_TEXT
+	textBox.Font = Enum.Font.Gotham
+	textBox.TextSize = 12
+	textBox.Text = isInt and string.format("%d", defaultVal) or string.format("%.1f", defaultVal)
+	textBox.Parent = container
+	corner(textBox, 4)
+
+	local currentVal = defaultVal
+
+	local function setValue(val)
+		currentVal = math.clamp(val, minVal, maxVal)
+		if isInt then currentVal = math.round(currentVal) end
+		local alpha = (currentVal - minVal) / (maxVal - minVal)
+		fill.Size = UDim2.new(alpha, 0, 1, 0)
+		thumb.Position = UDim2.new(alpha, -8, 0.5, -8)
+		textBox.Text = isInt and string.format("%d", currentVal) or string.format("%.1f", currentVal)
+		if onChange then onChange(currentVal) end
+	end
+
+	textBox.FocusLost:Connect(function()
+		local num = tonumber(textBox.Text)
+		if num then
+			setValue(num)
+		else
+			textBox.Text = isInt and string.format("%d", currentVal) or string.format("%.1f", currentVal)
+		end
+	end)
+
+	local dragging = false
+	sliderFrame.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			local relX = math.clamp((input.Position.X - sliderFrame.AbsolutePosition.X) / sliderFrame.AbsoluteSize.X, 0, 1)
+			setValue(minVal + relX * (maxVal - minVal))
+		end
+	end)
+	sliderFrame.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local relX = math.clamp((input.Position.X - sliderFrame.AbsolutePosition.X) / sliderFrame.AbsoluteSize.X, 0, 1)
+			setValue(minVal + relX * (maxVal - minVal))
+		end
+	end)
+
+	setValue(defaultVal)
+end
+
 --=====================================================================
 -- Auto Collect Logic
 --=====================================================================
@@ -995,6 +1107,8 @@ local autoCollectState = {
 	currentTween = nil,
 	busy         = false,
 	statusTab    = nil,
+	tweenSpeed   = 250,
+	delayTime    = 0,
 }
 
 local function getItemsForCategory(catName)
@@ -1020,22 +1134,29 @@ local function getItemsForCategory(catName)
 		for _, item in ipairs(scrapBeaconFolder:GetChildren()) do
 			table.insert(items, item)
 		end
+	elseif catName == "World Events" then
+		local g = workspace:FindFirstChild("Game")
+		local w = g and g:FindFirstChild("WorldEventDrops")
+		if w then
+			for _, item in ipairs(collectEntries(w, "World Events")) do
+				table.insert(items, item)
+			end
+		end
 	end
 	return items
 end
 
--- Tween toward an item. Returns true if tween started. onComplete(ok) fires once.
 local function tweenToItem(item, onComplete)
 	local part = getPart(item)
 	if not part then
 		if onComplete then onComplete(false) end
-		return false
+		return false, 0
 	end
 	local char = LocalPlayer.Character
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 	if not hrp then
 		if onComplete then onComplete(false) end
-		return false
+		return false, 0
 	end
 
 	if autoCollectState.currentTween then
@@ -1050,7 +1171,10 @@ local function tweenToItem(item, onComplete)
 
 	hrp.Anchored = true
 
-	local tween = TweenService:Create(cframeVal, TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Linear), {Value = endCF})
+	local dist = (startCF.Position - endCF.Position).Magnitude
+	local duration = math.max(0.05, dist / autoCollectState.tweenSpeed)
+
+	local tween = TweenService:Create(cframeVal, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Value = endCF})
 	autoCollectState.currentTween = tween
 
 	local finished = false
@@ -1094,13 +1218,12 @@ local function tweenToItem(item, onComplete)
 	end)
 
 	tween:Play()
-	return true
+	return true, duration
 end
 
--- Main collection driver
 task.spawn(function()
 	while true do
-		task.wait(0.15)
+		task.wait(0.3)
 		if not autoCollectState.running then continue end
 		if autoCollectState.busy then continue end
 
@@ -1164,12 +1287,12 @@ task.spawn(function()
 			end
 		elseif autoCollectState.mode == "Tween" then
 			local done, ok = false, false
-			tweenToItem(targetItem, function(success)
+			local _, tweenDur = tweenToItem(targetItem, function(success)
 				done = true
 				ok   = success
 			end)
 			local t0 = os.clock()
-			while not done and autoCollectState.running and (os.clock() - t0) < (TWEEN_DURATION + 2) do
+			while not done and autoCollectState.running and (os.clock() - t0) < ((tweenDur or 5) + 2) do
 				task.wait(0.05)
 			end
 			moved = ok
@@ -1186,6 +1309,14 @@ task.spawn(function()
 		if not targetItem:IsDescendantOf(workspace) then
 			autoCollectState.collected[targetItem] = true
 			autoCollectState.attempts[targetItem]  = nil
+			
+			if autoCollectState.delayTime and autoCollectState.delayTime > 0 then
+				if autoCollectState.statusTab and autoCollectState.statusTab.status then
+					autoCollectState.statusTab.status.Text = string.format("Waiting %.1fs...", autoCollectState.delayTime)
+					autoCollectState.statusTab.status.TextColor3 = C_SUB
+				end
+				task.wait(autoCollectState.delayTime)
+			end
 		else
 			local att = autoCollectState.attempts[targetItem] or {count = 0}
 			att.count += 1
@@ -1216,58 +1347,19 @@ end)
 -- tab configs
 --=====================================================================
 tabs = {
-	{
-		name          = "Items",
-		emptyText     = "No items spawned",
-		autoHighlight = true,
-		notify        = true,
-		getContainer  = function()
-			local g = workspace:FindFirstChild("Game")
-			return g and g:FindFirstChild("SpawnedItems")
-		end,
-	},
-	{
-		name          = "Supplies",
-		emptyText     = "No supplies spawned",
-		autoHighlight = false,
-		notify        = true,
-		getContainer  = function()
-			local g    = workspace:FindFirstChild("Game")
-			local gar  = g and g:FindFirstChild("Gardening")
-			return gar and gar:FindFirstChild("Foraging")
-		end,
-	},
-	{
-		name          = "Cases",
-		emptyText     = "No cases found.",
-		autoHighlight = false,
-		notify        = true,
-		getContainer  = function()
-			return caseBeaconFolder
-		end,
-	},
-	{
-		name          = "Teleports",
-		emptyText     = "No teleports available.",
-		autoHighlight = false,
-		notify        = false,
-		getContainer  = function()
-			return teleportBeaconFolder
-		end,
-	},
-	{
-		name          = "Scrap Barges",
-		emptyText     = "No scrap barges found.",
-		autoHighlight = false,
-		notify        = false,
-		getContainer  = function()
-			return scrapBeaconFolder
-		end,
-	},
-	{
-		name          = "Auto Collect",
-		isAutoCollect = true,
-	},
+	{ name = "Items", emptyText = "No items spawned", autoHighlight = true, notify = true,
+		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("SpawnedItems") end, },
+	{ name = "Supplies", emptyText = "No supplies spawned", autoHighlight = false, notify = true,
+		getContainer = function() local g = workspace:FindFirstChild("Game"); local gar = g and g:FindFirstChild("Gardening"); return gar and gar:FindFirstChild("Foraging") end, },
+	{ name = "Cases", emptyText = "No cases found.", autoHighlight = false, notify = true,
+		getContainer = function() return caseBeaconFolder end, },
+	{ name = "Teleports", emptyText = "No teleports available.", autoHighlight = false, notify = false,
+		getContainer = function() return teleportBeaconFolder end, },
+	{ name = "Scrap Barges", emptyText = "No scrap barges found.", autoHighlight = false, notify = false,
+		getContainer = function() return scrapBeaconFolder end, },
+	{ name = "World Events", emptyText = "No world event drops found.", autoHighlight = false, notify = true,
+		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("WorldEventDrops") end, },
+	{ name = "Auto Collect", isAutoCollect = true, },
 }
 
 local function buildTabBtn(tab, index, parentFrame)
@@ -1415,14 +1507,22 @@ local function buildAutoCollectBody(tab, parentFrame)
 	infoLbl.Size = UDim2.new(1, -24, 0, 30)
 	infoLbl.Parent = body
 
-	local targetOpts = {"Spawned Items", "Buried Supplies", "Scrap Barges"}
+	local targetOpts = {"Spawned Items", "Buried Supplies", "Scrap Barges", "World Events"}
 	buildMultiDropdown(body, "Target Categories", targetOpts, UDim2.fromOffset(10, 46), function(selected)
 		autoCollectState.targets = selected
 	end)
 
 	local modeOpts = {"Teleport", "Tween"}
-	buildDropdown(body, "Movement Mode", modeOpts, 1, UDim2.fromOffset(10, 126), function(idx, val)
+	buildDropdown(body, "Movement Mode", modeOpts, 1, UDim2.fromOffset(10, 106), function(idx, val)
 		autoCollectState.mode = val
+	end)
+
+	buildSlider(body, "Tween Speed (studs/s)", 50, 1000, 250, UDim2.fromOffset(10, 166), true, function(val)
+		autoCollectState.tweenSpeed = val
+	end)
+
+	buildSlider(body, "Delay after collection (s)", 0, 5, 0, UDim2.fromOffset(10, 226), false, function(val)
+		autoCollectState.delayTime = val
 	end)
 
 	local startBtn = Instance.new("TextButton")
@@ -1433,7 +1533,7 @@ local function buildAutoCollectBody(tab, parentFrame)
 	startBtn.BackgroundColor3 = C_ACCENT
 	startBtn.BorderSizePixel = 0
 	startBtn.Size = UDim2.new(1, -20, 0, 36)
-	startBtn.Position = UDim2.fromOffset(10, 210)
+	startBtn.Position = UDim2.fromOffset(10, 286)
 	startBtn.Parent = body
 	corner(startBtn, 6)
 
@@ -1444,7 +1544,7 @@ local function buildAutoCollectBody(tab, parentFrame)
 	status.TextColor3 = C_SUB
 	status.BackgroundTransparency = 1
 	status.TextXAlignment = Enum.TextXAlignment.Left
-	status.Position = UDim2.fromOffset(12, 260)
+	status.Position = UDim2.fromOffset(12, 336)
 	status.Size = UDim2.new(1, -24, 0, 16)
 	status.Parent = body
 
@@ -1499,7 +1599,7 @@ for i, tab in ipairs(tabs) do
 end
 
 --=====================================================================
--- manager factory
+-- manager factory (Optimized UI updating)
 --=====================================================================
 local function createManager(tab)
 	local state = {
@@ -1546,7 +1646,7 @@ local function createManager(tab)
 
 		local rightMargin = -8
 		local hasHL   = not tab.autoHighlight
-		local hasCopy = (tab.name == "Cases" or tab.name == "Teleports" or tab.name == "Scrap Barges")
+		local hasCopy = (tab.name == "Cases" or tab.name == "Teleports" or tab.name == "Scrap Barges" or tab.name == "World Events")
 
 		if hasCopy then rightMargin = rightMargin - 40 - 6 end
 		if hasHL   then rightMargin = rightMargin - 34 - 6 end
@@ -1681,18 +1781,9 @@ local function createManager(tab)
 		state.rows[item] = { frame = row, info = info, tp = tp, hl = hlBtn, part = part }
 	end
 
-	local function clearRows()
-		for _, data in pairs(state.rows) do
-			if data.frame then data.frame:Destroy() end
-		end
-		state.rows = {}
-	end
-
 	local function rebuild()
 		state.rebuildQueued  = false
 		state.rebuildVersion = (state.rebuildVersion or 0) + 1
-
-		clearRows()
 
 		local container = tab.getContainer()
 		if container ~= state.lastContainer then
@@ -1703,7 +1794,6 @@ local function createManager(tab)
 				local function queue(child)
 					if child and (child.Name == "SIM_Marker" or child.Name == "SIM_Highlight") then return end
 					if state.rebuildQueued then return end
-
 					state.rebuildQueued = true
 					local version = state.rebuildVersion
 					task.delay(0.2, function()
@@ -1728,12 +1818,15 @@ local function createManager(tab)
 			for item in pairs(state.knownItems) do clearHighlight(item) end
 			state.knownItems  = {}
 			state.lastItemSet = {}
+			for item, data in pairs(state.rows) do
+				data.frame:Destroy()
+			end
+			state.rows = {}
 			if tab == activeTab then updateCountLabel() end
 			return
 		end
 
 		local rawEntries = collectEntries(container, tab.name)
-
 		local entries = {}
 		for _, item in ipairs(rawEntries) do
 			if isValidItem(item, tab.name) then
@@ -1741,7 +1834,13 @@ local function createManager(tab)
 			end
 		end
 
+		-- Sorting logic (Fixing cases to sort numerically)
 		table.sort(entries, function(a, b)
+			if tab.name == "Cases" then
+				local numA = tonumber(a.Name:match("%d+")) or 0
+				local numB = tonumber(b.Name:match("%d+")) or 0
+				return numA < numB
+			end
 			return string.lower(getDisplayName(a, tab.name)) < string.lower(getDisplayName(b, tab.name))
 		end)
 
@@ -1771,24 +1870,23 @@ local function createManager(tab)
 			end
 		end
 
+		local activeRows = {}
 		local shown = 0
 
 		if tab.name == "Teleports" then
-			local groups = {
-				["Miscellaneous"] = {},
-				["Raids"] = {}
-			}
+			for _, child in ipairs(tab.scroll:GetChildren()) do
+				if child:IsA("TextLabel") or child:IsA("Frame") then child:Destroy() end
+			end
+			state.rows = {}
 
+			local groups = { ["Miscellaneous"] = {}, ["Raids"] = {} }
 			for _, item in ipairs(entries) do
 				local group = item:GetAttribute("Group") or "Miscellaneous"
-				if groups[group] then
-					table.insert(groups[group], item)
-				end
+				if groups[group] then table.insert(groups[group], item) end
 			end
 
 			local function renderGroup(groupName, list)
 				if #list == 0 then return end
-
 				shown += 1
 				local header = Instance.new("TextLabel")
 				header.Size = UDim2.new(1, 0, 0, 28)
@@ -1817,13 +1915,25 @@ local function createManager(tab)
 
 			renderGroup("Miscellaneous", groups["Miscellaneous"])
 			renderGroup("Raids", groups["Raids"])
-
 		else
 			for _, item in ipairs(entries) do
 				if matchesFilter(item) then
 					shown += 1
-					createRow(item, shown)
+					activeRows[item] = true
+					local data = state.rows[item]
+					if data then
+						data.frame.LayoutOrder = shown
+					else
+						createRow(item, shown)
+					end
 				end
+			end
+		end
+
+		for item, data in pairs(state.rows) do
+			if not activeRows[item] and tab.name ~= "Teleports" then
+				data.frame:Destroy()
+				state.rows[item] = nil
 			end
 		end
 
@@ -1842,16 +1952,6 @@ local function createManager(tab)
 	end
 
 	tab.rebuild = rebuild
-	tab.getItemSet = function(cont)
-		local set = {}
-		if not cont then return set end
-		for _, item in ipairs(collectEntries(cont, tab.name)) do
-			if isValidItem(item, tab.name) then
-				set[item] = true
-			end
-		end
-		return set
-	end
 end
 
 for _, tab in ipairs(tabs) do
@@ -1893,6 +1993,10 @@ updateCountLabel = function()
 		countLabel.BackgroundColor3 = C_ACCENT
 	elseif activeTab.name == "Scrap Barges" then
 		countLabel.Text = count .. " active"
+		countLabel.Size = UDim2.fromOffset(65, 22)
+		countLabel.BackgroundColor3 = C_ACCENT
+	elseif activeTab.name == "World Events" then
+		countLabel.Text = count .. " drops"
 		countLabel.Size = UDim2.fromOffset(65, 22)
 		countLabel.BackgroundColor3 = C_ACCENT
 	else
@@ -1939,7 +2043,6 @@ returnBtn.MouseButton1Click:Connect(function()
 	end
 end)
 
--- Header Drag
 do
 	local dragging, dragStart, startPos
 	header.InputBegan:Connect(function(input)
@@ -1969,7 +2072,6 @@ do
 	end)
 end
 
--- Toggle Button Drag & Click
 local toggleDragging = false
 local toggleDragStart = nil
 local toggleStartPos = nil
@@ -2061,7 +2163,7 @@ closeBtn.MouseButton1Click:Connect(function()
 end)
 
 --=====================================================================
--- filter changes (Debounced for performance)
+-- filter changes (Debounced)
 --=====================================================================
 for _, tab in ipairs(tabs) do
 	if not tab.isAutoCollect then
@@ -2078,21 +2180,45 @@ for _, tab in ipairs(tabs) do
 end
 
 --=====================================================================
--- poll: rebuild only when item set changes
+-- Optimized background task: live distance text
 --=====================================================================
+local function playerPosition()
+	local char = LocalPlayer.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	return root and root.Position or nil
+end
+
 task.spawn(function()
 	while true do
-		task.wait(AUTO_REFRESH)
-		for _, tab in ipairs(tabs) do
-			if tab.isAutoCollect then continue end
-			if tab.state.rebuildQueued then continue end
-			local container = tab.getContainer()
-			if container ~= tab.state.lastContainer then
-				tab.rebuild()
-			else
-				local currentSet = tab.getItemSet(container)
-				if not setsEqual(currentSet, tab.state.lastItemSet) then
-					tab.rebuild()
+		task.wait(1 / TEXT_HZ)
+		if activeTab and not activeTab.isAutoCollect then
+			local ppos = playerPosition()
+			for item, data in pairs(activeTab.state.rows) do
+				local p = data.part
+				if p and p:IsDescendantOf(workspace) then
+					if activeTab.state.showDistance then
+						local txt = "Unknown distance"
+						if ppos then
+							txt = string.format("%d studs", math.round((p.Position - ppos).Magnitude))
+						end
+						if data.info.Text ~= txt then
+							data.info.Text = txt
+						end
+					else
+						if data.info.Text ~= "" then
+							data.info.Text = ""
+						end
+					end
+					if data.tp.BackgroundColor3 ~= C_ACCENT then
+						data.tp.BackgroundColor3 = C_ACCENT
+					end
+				else
+					if data.info.Text ~= "No BasePart found" then
+						data.info.Text = "No BasePart found"
+					end
+					if data.tp.BackgroundColor3 ~= C_ROW_HOT then
+						data.tp.BackgroundColor3 = C_ROW_HOT
+					end
 				end
 			end
 		end
@@ -2100,61 +2226,15 @@ task.spawn(function()
 end)
 
 --=====================================================================
--- heartbeat: live studs text + fast container poll
+-- Optimized container check (1.5s)
 --=====================================================================
-local textAcc, pollAcc = 0, 0
-
-local function playerPosition()
-	local char = LocalPlayer.Character
-	local root = char and char:FindFirstChild("HumanoidRootPart")
-	return root and root.Position or nil
-end
-
-RunService.Heartbeat:Connect(function(dt)
-	pollAcc += dt
-	if pollAcc >= POLL_RATE then
-		pollAcc = 0
+task.spawn(function()
+	while true do
+		task.wait(1.5)
 		for _, tab in ipairs(tabs) do
 			if tab.isAutoCollect then continue end
 			if tab.getContainer() ~= tab.state.lastContainer then
 				tab.rebuild()
-			end
-		end
-	end
-
-	textAcc += dt
-	if textAcc < 1 / TEXT_HZ then return end
-	textAcc = 0
-
-	if activeTab and not activeTab.isAutoCollect then
-		local ppos = playerPosition()
-		for item, data in pairs(activeTab.state.rows) do
-			local p = data.part
-			if p and p:IsDescendantOf(workspace) then
-				if activeTab.state.showDistance then
-					local pos = p.Position
-					local txt = "Unknown distance"
-					if ppos then
-						txt = string.format("%d studs", math.round((pos - ppos).Magnitude))
-					end
-					if data.info.Text ~= txt then
-						data.info.Text = txt
-					end
-				else
-					if data.info.Text ~= "" then
-						data.info.Text = ""
-					end
-				end
-				if data.tp.BackgroundColor3 ~= C_ACCENT then
-					data.tp.BackgroundColor3 = C_ACCENT
-				end
-			else
-				if data.info.Text ~= "No BasePart found" then
-					data.info.Text = "No BasePart found"
-				end
-				if data.tp.BackgroundColor3 ~= C_ROW_HOT then
-					data.tp.BackgroundColor3 = C_ROW_HOT
-				end
 			end
 		end
 	end
