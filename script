@@ -1,10 +1,11 @@
 --!nocheck
 --=====================================================================
--- Stand Out Dashboard v30
---   * Added Case #8
---   * "Show Distance" now defaults to OFF
---   * Minimize button is now a standard hyphen
---   * Reopen button is now "SO" and is draggable
+-- Stand Out Dashboard v37.1 (Xeno Compatible)
+--   * Fixed Xeno crash: Removed Enum.PlaybackState dependency
+--   * REWRITTEN Auto Collect: TP + Tween now verified end-to-end
+--   * Fixed scrap radar "tabs scope" bug + debounced updates
+--   * Fixed rebuildQueued double-firing bug
+--   * Softer purple for multi-dropdown checkbox fill
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -18,24 +19,34 @@ local LocalPlayer = Players.LocalPlayer
 local Camera      = workspace.CurrentCamera
 local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 
-local TEXT_HZ      = 8
-local POLL_RATE    = 0.5
-local AUTO_REFRESH = 4
+local TEXT_HZ             = 8
+local POLL_RATE           = 0.5
+local AUTO_REFRESH        = 4
+local TWEEN_DURATION      = 0.5
+local COLLECT_MAX_TRIES   = 5
+local COLLECT_RETRY_DELAY = 1.2
+local TELEPORT_SETTLE     = 0.5
+local TWEEN_SETTLE        = 0.35
 
 -- UI Palette
-local C_BG      = Color3.fromRGB(22, 24, 29)
-local C_PANEL   = Color3.fromRGB(32, 35, 41)
-local C_ROW     = Color3.fromRGB(42, 46, 54)
-local C_ROW_HOT = Color3.fromRGB(56, 61, 72)
-local C_ACCENT  = Color3.fromRGB(100, 0, 255) -- Hex #6400ff
-local C_TEXT    = Color3.fromRGB(236, 239, 244)
-local C_SUB     = Color3.fromRGB(145, 153, 168)
-local C_OK      = Color3.fromRGB(72, 214, 128)
-local C_WARN    = Color3.fromRGB(255, 186, 92)
-local C_ERR     = Color3.fromRGB(255, 120, 110)
+local C_BG          = Color3.fromRGB(22, 24, 29)
+local C_PANEL       = Color3.fromRGB(32, 35, 41)
+local C_ROW         = Color3.fromRGB(42, 46, 54)
+local C_ROW_HOT     = Color3.fromRGB(56, 61, 72)
+local C_ACCENT      = Color3.fromRGB(100, 0, 255)
+local C_ACCENT_SOFT = Color3.fromRGB(82, 0, 208)
+local C_TEXT        = Color3.fromRGB(236, 239, 244)
+local C_SUB         = Color3.fromRGB(145, 153, 168)
+local C_OK          = Color3.fromRGB(72, 214, 128)
+local C_WARN        = Color3.fromRGB(255, 186, 92)
+local C_ERR         = Color3.fromRGB(255, 120, 110)
 
 local HL_FILL    = Color3.fromRGB(255, 0, 200)
 local HL_OUTLINE = Color3.fromRGB(255, 255, 255)
+
+local activeTab
+local updateCountLabel
+local tabs = {}   
 
 --=====================================================================
 -- STATIC COORDINATES
@@ -149,7 +160,9 @@ local function updateScrapBeacons()
 			beacon.Size = Vector3.new(1,1,1)
 			beacon.Parent = scrapBeaconFolder
 		end
-		beacon.Position = g.position
+		if beacon.Position ~= g.position then
+			beacon.Position = g.position
+		end
 		existing[beacon] = nil
 	end
 
@@ -158,29 +171,50 @@ local function updateScrapBeacons()
 	end
 end
 
-task.spawn(function()
-	while true do
-		task.wait(0.5)
+local scrapUpdateScheduled = false
+local function scheduleScrapUpdate()
+	if scrapUpdateScheduled then return end
+	scrapUpdateScheduled = true
+	task.delay(0.3, function()
+		scrapUpdateScheduled = false
 		updateScrapBeacons()
-	end
-end)
+	end)
+end
+
+local mapListenerConns = {}
+local function setupMapListeners()
+	for _, c in ipairs(mapListenerConns) do c:Disconnect() end
+	mapListenerConns = {}
+
+	local gameFolder = workspace:FindFirstChild("Game")
+	local mapFolder  = gameFolder and gameFolder:FindFirstChild("Map")
+	if not mapFolder then return false end
+
+	table.insert(mapListenerConns, mapFolder.DescendantAdded:Connect(function(obj)
+		if obj.Name == "DebrisPiece" then
+			scheduleScrapUpdate()
+		end
+	end))
+	table.insert(mapListenerConns, mapFolder.DescendantRemoving:Connect(function(obj)
+		if obj.Name == "DebrisPiece" then
+			scheduleScrapUpdate()
+			task.delay(0.15, function()
+				if activeTab and activeTab.name == "Scrap Barges" and activeTab.rebuild then
+					activeTab.rebuild()
+				end
+			end)
+		end
+	end))
+	return true
+end
 
 task.spawn(function()
-	local map = workspace:FindFirstChild("Game") and workspace.Game:FindFirstChild("Map")
-	if map then
-		map.DescendantRemoving:Connect(function(obj)
-			if obj.Name == "DebrisPiece" then
-				task.wait(0.1)
-				updateScrapBeacons()
-				local scrapTab = nil
-				for _, t in ipairs(tabs) do 
-					if t.name == "Scrap Barges" then scrapTab = t break end 
-				end
-				if scrapTab and activeTab == scrapTab then
-					scrapTab.rebuild()
-				end
-			end
-		end)
+	while true do
+		if #mapListenerConns == 0 then
+			setupMapListeners()
+		end
+		scheduleScrapUpdate()   
+		task.wait(15)
 	end
 end)
 
@@ -192,13 +226,13 @@ local caseCount = #STATIC_CASES
 local function scanForCases()
 	local localProps = workspace:FindFirstChild("LocalProps")
 	if not localProps then return end
-	
+
 	for _, child in localProps:GetChildren() do
 		if child.Name == "Case" then
 			local pos
 			if child:IsA("BasePart") then pos = child.Position
 			elseif child:IsA("Model") then pos = child:GetPivot().Position end
-			
+
 			if pos then
 				local isSaved = false
 				for _, beacon in caseBeaconFolder:GetChildren() do
@@ -207,7 +241,7 @@ local function scanForCases()
 						break
 					end
 				end
-				
+
 				if not isSaved then
 					caseCount += 1
 					local beacon = Instance.new("Part")
@@ -296,8 +330,8 @@ local function isValidItem(item, tabName)
 		local gameFolder = workspace:FindFirstChild("Game")
 		local nodesFolder = gameFolder and gameFolder:FindFirstChild("ItemSpawnNodes")
 		local arrowsFolder = nodesFolder and nodesFolder:FindFirstChild("Arrows")
-		
-		if not arrowsFolder then return true end 
+
+		if not arrowsFolder then return true end
 
 		local part = getPart(item)
 		if not part then return false end
@@ -311,7 +345,7 @@ local function isValidItem(item, tabName)
 				end
 			end
 		end
-		return false 
+		return false
 	end
 	return true
 end
@@ -384,7 +418,7 @@ local lastNotifTime = {}
 local function notifySpawn(item, tabName)
 	local name = getDisplayName(item, tabName)
 	local now = os.clock()
-	
+
 	if tabName == "Items" and not isValidItem(item, tabName) then
 		return
 	end
@@ -465,17 +499,17 @@ local function buildMarker(part)
 	ringStroke.Transparency = 0
 	ringStroke.Parent = ring
 
+	local tInfo = TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local tweenRing = TweenService:Create(ring, tInfo, {Size = UDim2.fromOffset(210, 210), Position = UDim2.fromOffset(5, 5)})
+	local tweenStroke = TweenService:Create(ringStroke, tInfo, {Transparency = 1})
+
 	task.spawn(function()
 		while billboard.Parent do
 			ring.Size     = UDim2.fromOffset(26, 26)
 			ring.Position = UDim2.fromOffset(97, 97)
 			ringStroke.Transparency = 0
-			TweenService:Create(ring, TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-				Size = UDim2.fromOffset(210, 210), Position = UDim2.fromOffset(5, 5),
-			}):Play()
-			TweenService:Create(ringStroke, TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-				Transparency = 1,
-			}):Play()
+			tweenRing:Play()
+			tweenStroke:Play()
 			task.wait(1.6)
 		end
 	end)
@@ -518,16 +552,20 @@ LocalPlayer.CharacterAdded:Connect(function()
 	savedPosition = nil
 end)
 
-local function teleportToItem(item)
-	local part = getPart(item)
-	if not part then return false, "Item has no BasePart." end
+local function teleportToPosition(targetPos)
 	local char = LocalPlayer.Character
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return false, "Character not available." end
 	if not savedPosition then savedPosition = hrp.CFrame end
-	hrp.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
+	hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
 	Camera.CameraType = Enum.CameraType.Custom
 	return true
+end
+
+local function teleportToItem(item)
+	local part = getPart(item)
+	if not part then return false, "Item has no BasePart." end
+	return teleportToPosition(part.Position)
 end
 
 local function returnToSaved()
@@ -697,9 +735,487 @@ returnBtn.Parent           = footer
 corner(returnBtn, 6)
 
 --=====================================================================
+-- Dropdown Helpers
+--=====================================================================
+local function closeAllDropdowns(parent)
+	for _, child in ipairs(parent:GetDescendants()) do
+		if child:IsA("Frame") and child.Name == "DropdownOptions" then
+			child.Visible = false
+		end
+	end
+end
+
+local function buildDropdown(parent, label, options, defaultIndex, position, onChange)
+	local container = Instance.new("Frame")
+	container.Size = UDim2.new(1, -20, 0, 50)
+	container.Position = position
+	container.BackgroundTransparency = 1
+	container.Parent = parent
+
+	local labelLbl = Instance.new("TextLabel")
+	labelLbl.Text = label
+	labelLbl.Font = Enum.Font.GothamBold
+	labelLbl.TextSize = 11
+	labelLbl.TextColor3 = C_SUB
+	labelLbl.BackgroundTransparency = 1
+	labelLbl.Size = UDim2.new(1, 0, 0, 16)
+	labelLbl.TextXAlignment = Enum.TextXAlignment.Left
+	labelLbl.Parent = container
+
+	local button = Instance.new("TextButton")
+	button.Text = options[defaultIndex] or options[1]
+	button.Font = Enum.Font.Gotham
+	button.TextSize = 12
+	button.TextColor3 = C_TEXT
+	button.BackgroundColor3 = C_PANEL
+	button.BorderSizePixel = 0
+	button.Size = UDim2.new(1, 0, 0, 30)
+	button.Position = UDim2.new(0, 0, 0, 18)
+	button.TextXAlignment = Enum.TextXAlignment.Left
+	button.Parent = container
+	corner(button, 6)
+	local sp = Instance.new("UIPadding"); sp.PaddingLeft = UDim.new(0, 8); sp.Parent = button
+
+	local arrow = Instance.new("TextLabel")
+	arrow.Text = "▼"
+	arrow.Font = Enum.Font.GothamBold
+	arrow.TextSize = 10
+	arrow.TextColor3 = C_SUB
+	arrow.BackgroundTransparency = 1
+	arrow.Size = UDim2.fromOffset(20, 30)
+	arrow.Position = UDim2.new(1, -25, 0, 0)
+	arrow.Parent = button
+
+	local optionsFrame = Instance.new("Frame")
+	optionsFrame.Name = "DropdownOptions"
+	optionsFrame.Size = UDim2.new(1, 0, 0, #options * 30 + 4)
+	optionsFrame.Position = UDim2.new(0, 0, 0, 50)
+	optionsFrame.BackgroundColor3 = C_PANEL
+	optionsFrame.BorderSizePixel = 0
+	optionsFrame.Visible = false
+	optionsFrame.ZIndex = 20
+	optionsFrame.Parent = container
+	corner(optionsFrame, 6)
+
+	local optList = Instance.new("UIListLayout")
+	optList.Padding = UDim.new(0, 2)
+	optList.Parent = optionsFrame
+
+	local optPad = Instance.new("UIPadding")
+	optPad.PaddingTop = UDim.new(0, 2)
+	optPad.PaddingLeft = UDim.new(0, 2)
+	optPad.PaddingRight = UDim.new(0, 2)
+	optPad.Parent = optionsFrame
+
+	button.MouseButton1Click:Connect(function()
+		local wasOpen = optionsFrame.Visible
+		closeAllDropdowns(parent)
+		optionsFrame.Visible = not wasOpen
+	end)
+
+	for i, opt in ipairs(options) do
+		local optBtn = Instance.new("TextButton")
+		optBtn.Text = opt
+		optBtn.Font = Enum.Font.Gotham
+		optBtn.TextSize = 12
+		optBtn.TextColor3 = C_TEXT
+		optBtn.BackgroundColor3 = C_PANEL
+		optBtn.BorderSizePixel = 0
+		optBtn.Size = UDim2.new(1, 0, 0, 28)
+		optBtn.TextXAlignment = Enum.TextXAlignment.Left
+		optBtn.ZIndex = 21
+		optBtn.Parent = optionsFrame
+		corner(optBtn, 4)
+		local sp2 = Instance.new("UIPadding"); sp2.PaddingLeft = UDim.new(0, 8); sp2.Parent = optBtn
+
+		optBtn.MouseEnter:Connect(function() optBtn.BackgroundColor3 = C_ROW_HOT end)
+		optBtn.MouseLeave:Connect(function() optBtn.BackgroundColor3 = C_PANEL end)
+
+		optBtn.MouseButton1Click:Connect(function()
+			button.Text = opt
+			optionsFrame.Visible = false
+			if onChange then onChange(i, opt) end
+		end)
+	end
+end
+
+local function buildMultiDropdown(parent, label, options, position, onChange)
+	local container = Instance.new("Frame")
+	container.Size = UDim2.new(1, -20, 0, 50)
+	container.Position = position
+	container.BackgroundTransparency = 1
+	container.Parent = parent
+
+	local labelLbl = Instance.new("TextLabel")
+	labelLbl.Text = label
+	labelLbl.Font = Enum.Font.GothamBold
+	labelLbl.TextSize = 11
+	labelLbl.TextColor3 = C_SUB
+	labelLbl.BackgroundTransparency = 1
+	labelLbl.Size = UDim2.new(1, 0, 0, 16)
+	labelLbl.TextXAlignment = Enum.TextXAlignment.Left
+	labelLbl.Parent = container
+
+	local button = Instance.new("TextButton")
+	button.Text = "None Selected"
+	button.Font = Enum.Font.Gotham
+	button.TextSize = 12
+	button.TextColor3 = C_TEXT
+	button.BackgroundColor3 = C_PANEL
+	button.BorderSizePixel = 0
+	button.Size = UDim2.new(1, 0, 0, 30)
+	button.Position = UDim2.new(0, 0, 0, 18)
+	button.TextXAlignment = Enum.TextXAlignment.Left
+	button.Parent = container
+	corner(button, 6)
+	local sp = Instance.new("UIPadding"); sp.PaddingLeft = UDim.new(0, 8); sp.Parent = button
+
+	local arrow = Instance.new("TextLabel")
+	arrow.Text = "▼"
+	arrow.Font = Enum.Font.GothamBold
+	arrow.TextSize = 10
+	arrow.TextColor3 = C_SUB
+	arrow.BackgroundTransparency = 1
+	arrow.Size = UDim2.fromOffset(20, 30)
+	arrow.Position = UDim2.new(1, -25, 0, 0)
+	arrow.Parent = button
+
+	local optionsFrame = Instance.new("Frame")
+	optionsFrame.Name = "DropdownOptions"
+	optionsFrame.Size = UDim2.new(1, 0, 0, #options * 32 + 4)
+	optionsFrame.Position = UDim2.new(0, 0, 0, 50)
+	optionsFrame.BackgroundColor3 = C_PANEL
+	optionsFrame.BorderSizePixel = 0
+	optionsFrame.Visible = false
+	optionsFrame.ZIndex = 20
+	optionsFrame.Parent = container
+	corner(optionsFrame, 6)
+
+	local optList = Instance.new("UIListLayout")
+	optList.Padding = UDim.new(0, 2)
+	optList.Parent = optionsFrame
+
+	local optPad = Instance.new("UIPadding")
+	optPad.PaddingTop = UDim.new(0, 2)
+	optPad.PaddingLeft = UDim.new(0, 2)
+	optPad.PaddingRight = UDim.new(0, 2)
+	optPad.Parent = optionsFrame
+
+	local selected = {}
+
+	local function updateButtonText()
+		local count = 0
+		for _ in pairs(selected) do count += 1 end
+
+		if count == 0 then
+			button.Text = "None Selected"
+		elseif count == 1 then
+			for k in pairs(selected) do button.Text = k end
+		else
+			button.Text = count .. " Selected"
+		end
+		if onChange then onChange(selected) end
+	end
+
+	button.MouseButton1Click:Connect(function()
+		local wasOpen = optionsFrame.Visible
+		closeAllDropdowns(parent)
+		optionsFrame.Visible = not wasOpen
+	end)
+
+	for i, opt in ipairs(options) do
+		local optBtn = Instance.new("TextButton")
+		optBtn.Text = ""
+		optBtn.BackgroundColor3 = C_PANEL
+		optBtn.BorderSizePixel = 0
+		optBtn.Size = UDim2.new(1, 0, 0, 28)
+		optBtn.ZIndex = 21
+		optBtn.Parent = optionsFrame
+		corner(optBtn, 4)
+
+		local checkBg = Instance.new("Frame")
+		checkBg.Size = UDim2.fromOffset(16, 16)
+		checkBg.Position = UDim2.new(0, 8, 0.5, -8)
+		checkBg.BackgroundColor3 = C_BG
+		checkBg.BorderSizePixel = 0
+		checkBg.ZIndex = 22
+		checkBg.Parent = optBtn
+		corner(checkBg, 3)
+
+		local checkMark = Instance.new("TextLabel")
+		checkMark.Text = "✔"
+		checkMark.Font = Enum.Font.GothamBold
+		checkMark.TextSize = 12
+		checkMark.TextColor3 = C_TEXT
+		checkMark.BackgroundTransparency = 1
+		checkMark.Size = UDim2.new(1, 0, 1, 0)
+		checkMark.Visible = false
+		checkMark.ZIndex = 23
+		checkMark.Parent = checkBg
+
+		local textLbl = Instance.new("TextLabel")
+		textLbl.Text = opt
+		textLbl.Font = Enum.Font.Gotham
+		textLbl.TextSize = 12
+		textLbl.TextColor3 = C_TEXT
+		textLbl.BackgroundTransparency = 1
+		textLbl.Position = UDim2.fromOffset(32, 0)
+		textLbl.Size = UDim2.new(1, -40, 1, 0)
+		textLbl.TextXAlignment = Enum.TextXAlignment.Left
+		textLbl.ZIndex = 22
+		textLbl.Parent = optBtn
+
+		optBtn.MouseEnter:Connect(function() optBtn.BackgroundColor3 = C_ROW_HOT end)
+		optBtn.MouseLeave:Connect(function() optBtn.BackgroundColor3 = C_PANEL end)
+
+		optBtn.MouseButton1Click:Connect(function()
+			if selected[opt] then
+				selected[opt] = nil
+				checkBg.BackgroundColor3 = C_BG
+				checkMark.Visible = false
+			else
+				selected[opt] = true
+				checkBg.BackgroundColor3 = C_ACCENT_SOFT
+				checkMark.Visible = true
+			end
+			updateButtonText()
+		end)
+	end
+end
+
+--=====================================================================
+-- Auto Collect Logic
+--=====================================================================
+local autoCollectState = {
+	running      = false,
+	targets      = {},
+	mode         = "Teleport",
+	collected    = {},
+	attempts     = {},
+	currentTween = nil,
+	busy         = false,
+	statusTab    = nil,
+}
+
+local function getItemsForCategory(catName)
+	local items = {}
+	if catName == "Spawned Items" then
+		local g = workspace:FindFirstChild("Game")
+		local c = g and g:FindFirstChild("SpawnedItems")
+		if c then
+			for _, item in ipairs(collectEntries(c, "Items")) do
+				if isValidItem(item, "Items") then table.insert(items, item) end
+			end
+		end
+	elseif catName == "Buried Supplies" then
+		local g = workspace:FindFirstChild("Game")
+		local gar = g and g:FindFirstChild("Gardening")
+		local for_ = gar and gar:FindFirstChild("Foraging")
+		if for_ then
+			for _, child in ipairs(for_:GetChildren()) do
+				if child.Name:match("^BuriedSupplies") then table.insert(items, child) end
+			end
+		end
+	elseif catName == "Scrap Barges" then
+		for _, item in ipairs(scrapBeaconFolder:GetChildren()) do
+			table.insert(items, item)
+		end
+	end
+	return items
+end
+
+-- Tween toward an item. Returns true if tween started. onComplete(ok) fires once.
+local function tweenToItem(item, onComplete)
+	local part = getPart(item)
+	if not part then
+		if onComplete then onComplete(false) end
+		return false
+	end
+	local char = LocalPlayer.Character
+	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		if onComplete then onComplete(false) end
+		return false
+	end
+
+	if autoCollectState.currentTween then
+		pcall(function() autoCollectState.currentTween:Cancel() end)
+		autoCollectState.currentTween = nil
+	end
+
+	local startCF = hrp.CFrame
+	local endCF   = CFrame.new(part.Position + Vector3.new(0, 3, 0))
+	local cframeVal = Instance.new("CFrameValue")
+	cframeVal.Value = startCF
+
+	hrp.Anchored = true
+
+	local tween = TweenService:Create(cframeVal, TweenInfo.new(TWEEN_DURATION, Enum.EasingStyle.Linear), {Value = endCF})
+	autoCollectState.currentTween = tween
+
+	local finished = false
+	local cancelled = false
+	local conn
+
+	local function finalize(success)
+		if finished then return end
+		finished = true
+
+		if conn then
+			conn:Disconnect()
+			conn = nil
+		end
+		if hrp and hrp.Parent then
+			hrp.Anchored = false
+		end
+		if cframeVal and cframeVal.Parent then
+			cframeVal:Destroy()
+		end
+		if autoCollectState.currentTween == tween then
+			autoCollectState.currentTween = nil
+		end
+		if onComplete then onComplete(success and not cancelled) end
+	end
+
+	conn = cframeVal.Changed:Connect(function(val)
+		if finished then return end
+		if not autoCollectState.running then
+			cancelled = true
+			pcall(function() tween:Cancel() end)
+			return
+		end
+		if hrp and hrp.Parent then
+			hrp.CFrame = val
+		end
+	end)
+
+	tween.Completed:Connect(function()
+		finalize(true)
+	end)
+
+	tween:Play()
+	return true
+end
+
+-- Main collection driver
+task.spawn(function()
+	while true do
+		task.wait(0.15)
+		if not autoCollectState.running then continue end
+		if autoCollectState.busy then continue end
+
+		for inst in pairs(autoCollectState.collected) do
+			if not inst:IsDescendantOf(workspace) then
+				autoCollectState.collected[inst] = nil
+			end
+		end
+		for inst in pairs(autoCollectState.attempts) do
+			if not inst:IsDescendantOf(workspace) then
+				autoCollectState.attempts[inst] = nil
+			end
+		end
+
+		local char = LocalPlayer.Character
+		local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then continue end
+
+		local available = {}
+		for targetName in pairs(autoCollectState.targets) do
+			local items = getItemsForCategory(targetName)
+			for _, item in ipairs(items) do
+				if not autoCollectState.collected[item] and item:IsDescendantOf(workspace) then
+					local part = getPart(item)
+					if part then
+						table.insert(available, {item = item, pos = part.Position})
+					end
+				end
+			end
+		end
+
+		if #available == 0 then
+			if autoCollectState.statusTab and autoCollectState.statusTab.status then
+				autoCollectState.statusTab.status.Text = "Waiting for items..."
+				autoCollectState.statusTab.status.TextColor3 = C_SUB
+			end
+			continue
+		end
+
+		local ppos = hrp.Position
+		table.sort(available, function(a, b)
+			return (a.pos - ppos).Magnitude < (b.pos - ppos).Magnitude
+		end)
+
+		local targetItem = available[1].item
+		local name       = getDisplayName(targetItem, "Items")
+
+		if autoCollectState.statusTab and autoCollectState.statusTab.status then
+			autoCollectState.statusTab.status.Text = "Collecting: " .. name
+			autoCollectState.statusTab.status.TextColor3 = C_OK
+		end
+
+		autoCollectState.busy = true
+
+		local moved = false
+		if autoCollectState.mode == "Teleport" then
+			local ok = teleportToItem(targetItem)
+			moved = ok == true
+			if moved then
+				task.wait(TELEPORT_SETTLE)
+			end
+		elseif autoCollectState.mode == "Tween" then
+			local done, ok = false, false
+			tweenToItem(targetItem, function(success)
+				done = true
+				ok   = success
+			end)
+			local t0 = os.clock()
+			while not done and autoCollectState.running and (os.clock() - t0) < (TWEEN_DURATION + 2) do
+				task.wait(0.05)
+			end
+			moved = ok
+			if moved then
+				task.wait(TWEEN_SETTLE)
+			end
+		end
+
+		if not autoCollectState.running then
+			autoCollectState.busy = false
+			continue
+		end
+
+		if not targetItem:IsDescendantOf(workspace) then
+			autoCollectState.collected[targetItem] = true
+			autoCollectState.attempts[targetItem]  = nil
+		else
+			local att = autoCollectState.attempts[targetItem] or {count = 0}
+			att.count += 1
+			autoCollectState.attempts[targetItem] = att
+
+			if att.count >= COLLECT_MAX_TRIES then
+				autoCollectState.collected[targetItem] = true
+				if autoCollectState.statusTab and autoCollectState.statusTab.status then
+					autoCollectState.statusTab.status.Text = "Gave up: " .. name
+					autoCollectState.statusTab.status.TextColor3 = C_WARN
+				end
+				task.wait(0.8)
+			else
+				if autoCollectState.statusTab and autoCollectState.statusTab.status then
+					autoCollectState.statusTab.status.Text =
+						string.format("Retrying %s (%d/%d)", name, att.count, COLLECT_MAX_TRIES)
+					autoCollectState.statusTab.status.TextColor3 = C_WARN
+				end
+				task.wait(COLLECT_RETRY_DELAY)
+			end
+		end
+
+		autoCollectState.busy = false
+	end
+end)
+
+--=====================================================================
 -- tab configs
 --=====================================================================
-local tabs = {
+tabs = {
 	{
 		name          = "Items",
 		emptyText     = "No items spawned",
@@ -748,6 +1264,10 @@ local tabs = {
 			return scrapBeaconFolder
 		end,
 	},
+	{
+		name          = "Auto Collect",
+		isAutoCollect = true,
+	},
 }
 
 local function buildTabBtn(tab, index, parentFrame)
@@ -774,7 +1294,6 @@ local function buildTabBody(tab, parentFrame)
 	body.Visible               = false
 	body.Parent                = parentFrame
 
-	-- Distance Toggle Bar
 	local toggleBar = Instance.new("Frame")
 	toggleBar.Size = UDim2.new(1, 0, 0, 36)
 	toggleBar.BackgroundColor3 = Color3.fromRGB(28, 30, 35)
@@ -876,23 +1395,119 @@ local function buildTabBody(tab, parentFrame)
 	tab.empty  = empty
 end
 
+local function buildAutoCollectBody(tab, parentFrame)
+	local body = Instance.new("Frame")
+	body.Position              = UDim2.fromOffset(140, 36)
+	body.Size                  = UDim2.new(1, -140, 1, -80)
+	body.BackgroundTransparency= 1
+	body.Visible               = false
+	body.Parent                = parentFrame
+
+	local infoLbl = Instance.new("TextLabel")
+	infoLbl.Text = "Configure your auto-collect targets and movement below."
+	infoLbl.Font = Enum.Font.Gotham
+	infoLbl.TextSize = 11
+	infoLbl.TextColor3 = C_SUB
+	infoLbl.BackgroundTransparency = 1
+	infoLbl.TextXAlignment = Enum.TextXAlignment.Left
+	infoLbl.TextWrapped = true
+	infoLbl.Position = UDim2.fromOffset(12, 10)
+	infoLbl.Size = UDim2.new(1, -24, 0, 30)
+	infoLbl.Parent = body
+
+	local targetOpts = {"Spawned Items", "Buried Supplies", "Scrap Barges"}
+	buildMultiDropdown(body, "Target Categories", targetOpts, UDim2.fromOffset(10, 46), function(selected)
+		autoCollectState.targets = selected
+	end)
+
+	local modeOpts = {"Teleport", "Tween"}
+	buildDropdown(body, "Movement Mode", modeOpts, 1, UDim2.fromOffset(10, 126), function(idx, val)
+		autoCollectState.mode = val
+	end)
+
+	local startBtn = Instance.new("TextButton")
+	startBtn.Text = "Start Auto Collect"
+	startBtn.Font = Enum.Font.GothamBold
+	startBtn.TextSize = 12
+	startBtn.TextColor3 = C_TEXT
+	startBtn.BackgroundColor3 = C_ACCENT
+	startBtn.BorderSizePixel = 0
+	startBtn.Size = UDim2.new(1, -20, 0, 36)
+	startBtn.Position = UDim2.fromOffset(10, 210)
+	startBtn.Parent = body
+	corner(startBtn, 6)
+
+	local status = Instance.new("TextLabel")
+	status.Text = "Status: Idle"
+	status.Font = Enum.Font.Gotham
+	status.TextSize = 11
+	status.TextColor3 = C_SUB
+	status.BackgroundTransparency = 1
+	status.TextXAlignment = Enum.TextXAlignment.Left
+	status.Position = UDim2.fromOffset(12, 260)
+	status.Size = UDim2.new(1, -24, 0, 16)
+	status.Parent = body
+
+	startBtn.MouseButton1Click:Connect(function()
+		closeAllDropdowns(body)
+		autoCollectState.running = not autoCollectState.running
+		if autoCollectState.running then
+			local char = LocalPlayer.Character
+			local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+			if hrp and not savedPosition then
+				savedPosition = hrp.CFrame
+			end
+
+			autoCollectState.collected = {}
+			autoCollectState.attempts  = {}
+			autoCollectState.busy      = false
+
+			startBtn.Text = "Stop Auto Collect"
+			startBtn.BackgroundColor3 = C_ERR
+			status.Text = "Status: Running"
+			status.TextColor3 = C_OK
+		else
+			if autoCollectState.currentTween then
+				pcall(function() autoCollectState.currentTween:Cancel() end)
+				autoCollectState.currentTween = nil
+			end
+			autoCollectState.busy = false
+
+			startBtn.Text = "Start Auto Collect"
+			startBtn.BackgroundColor3 = C_ACCENT
+			status.Text = "Status: Stopped"
+			status.TextColor3 = C_SUB
+		end
+		updateCountLabel()
+	end)
+
+	tab.body = body
+	tab.state = { shownCount = 0 }
+	tab.status = status
+	tab.startBtn = startBtn
+
+	autoCollectState.statusTab = tab
+end
+
 for i, tab in ipairs(tabs) do
 	tab.tabBtn = buildTabBtn(tab, i - 1, tabBar)
-	buildTabBody(tab, main)
+	if tab.isAutoCollect then
+		buildAutoCollectBody(tab, main)
+	else
+		buildTabBody(tab, main)
+	end
 end
 
 --=====================================================================
 -- manager factory
 --=====================================================================
-local activeTab
-local updateCountLabel = function() end
-
 local function createManager(tab)
 	local state = {
 		rows = {}, addedConn = nil, removedConn = nil,
 		lastContainer = nil, lastItemSet = {}, knownItems = {},
-		initialized = false, rebuildQueued = false, shownCount = 0,
-		showDistance = false, -- Default OFF
+		initialized = false, rebuildQueued = false, rebuildVersion = 0,
+		shownCount = 0,
+		showDistance = false,
 	}
 	tab.state = state
 
@@ -904,6 +1519,14 @@ local function createManager(tab)
 		else
 			tab.toggleBtn.Text = "OFF"
 			tab.toggleBtn.BackgroundColor3 = C_ROW
+		end
+
+		for item, data in pairs(state.rows) do
+			if state.showDistance then
+				data.info.Text = "Calculating..."
+			else
+				data.info.Text = ""
+			end
 		end
 	end)
 
@@ -958,7 +1581,7 @@ local function createManager(tab)
 		info.TextColor3     = C_SUB
 		info.TextXAlignment = Enum.TextXAlignment.Left
 		info.TextTruncate   = Enum.TextTruncate.AtEnd
-		info.Text           = "Calculating..."
+		info.Text           = state.showDistance and "Calculating..." or ""
 		info.Parent         = row
 
 		local tp = Instance.new("TextButton")
@@ -968,7 +1591,7 @@ local function createManager(tab)
 		tp.TextColor3       = Color3.new(1, 1, 1)
 		tp.TextStrokeColor3 = Color3.new(0, 0, 0)
 		tp.TextStrokeTransparency = 0.5
-		
+
 		tp.BackgroundColor3 = part and C_ACCENT or C_ROW_HOT
 		tp.BorderSizePixel  = 0
 		tp.Position         = UDim2.new(1, -66, 0.5, -14)
@@ -1020,7 +1643,7 @@ local function createManager(tab)
 					local text = string.format("%.2f, %.2f, %.2f", pos.X, pos.Y, pos.Z)
 					if setclipboard then
 						pcall(setclipboard, text)
-						copyBtn.Text = "✓"
+						copyBtn.Text = "✔"
 						copyBtn.TextColor3 = C_OK
 						task.delay(1.5, function()
 							if copyBtn and copyBtn.Parent then
@@ -1066,6 +1689,9 @@ local function createManager(tab)
 	end
 
 	local function rebuild()
+		state.rebuildQueued  = false
+		state.rebuildVersion = (state.rebuildVersion or 0) + 1
+
 		clearRows()
 
 		local container = tab.getContainer()
@@ -1076,12 +1702,16 @@ local function createManager(tab)
 			if container then
 				local function queue(child)
 					if child and (child.Name == "SIM_Marker" or child.Name == "SIM_Highlight") then return end
-					
 					if state.rebuildQueued then return end
+
 					state.rebuildQueued = true
-					task.defer(function()
-						state.rebuildQueued = false
-						rebuild()
+					local version = state.rebuildVersion
+					task.delay(0.2, function()
+						if state.rebuildQueued and state.rebuildVersion == version then
+							rebuild()
+						else
+							state.rebuildQueued = false
+						end
 					end)
 				end
 				state.addedConn   = container.DescendantAdded:Connect(queue)
@@ -1103,7 +1733,7 @@ local function createManager(tab)
 		end
 
 		local rawEntries = collectEntries(container, tab.name)
-		
+
 		local entries = {}
 		for _, item in ipairs(rawEntries) do
 			if isValidItem(item, tab.name) then
@@ -1142,13 +1772,13 @@ local function createManager(tab)
 		end
 
 		local shown = 0
-		
+
 		if tab.name == "Teleports" then
 			local groups = {
 				["Miscellaneous"] = {},
 				["Raids"] = {}
 			}
-			
+
 			for _, item in ipairs(entries) do
 				local group = item:GetAttribute("Group") or "Miscellaneous"
 				if groups[group] then
@@ -1158,7 +1788,7 @@ local function createManager(tab)
 
 			local function renderGroup(groupName, list)
 				if #list == 0 then return end
-				
+
 				shown += 1
 				local header = Instance.new("TextLabel")
 				header.Size = UDim2.new(1, 0, 0, 28)
@@ -1170,15 +1800,15 @@ local function createManager(tab)
 				header.TextXAlignment = Enum.TextXAlignment.Left
 				header.LayoutOrder = shown
 				header.Parent = tab.scroll
-				
+
 				local pad = Instance.new("UIPadding")
 				pad.PaddingLeft = UDim.new(0, 8)
 				pad.Parent = header
-				
+
 				table.sort(list, function(a, b)
 					return (a:GetAttribute("Order") or 0) < (b:GetAttribute("Order") or 0)
 				end)
-				
+
 				for _, item in ipairs(list) do
 					shown += 1
 					createRow(item, shown)
@@ -1187,7 +1817,7 @@ local function createManager(tab)
 
 			renderGroup("Miscellaneous", groups["Miscellaneous"])
 			renderGroup("Raids", groups["Raids"])
-			
+
 		else
 			for _, item in ipairs(entries) do
 				if matchesFilter(item) then
@@ -1215,39 +1845,60 @@ local function createManager(tab)
 	tab.getItemSet = function(cont)
 		local set = {}
 		if not cont then return set end
-		for _, item in ipairs(collectEntries(cont, tab.name)) do 
+		for _, item in ipairs(collectEntries(cont, tab.name)) do
 			if isValidItem(item, tab.name) then
-				set[item] = true 
+				set[item] = true
 			end
 		end
 		return set
 	end
 end
 
-for _, tab in ipairs(tabs) do createManager(tab) end
+for _, tab in ipairs(tabs) do
+	if not tab.isAutoCollect then
+		createManager(tab)
+	end
+end
 
 --=====================================================================
 -- tab switching & dynamic counts
 --=====================================================================
 updateCountLabel = function()
 	if not activeTab then return end
+
+	if activeTab.isAutoCollect then
+		if autoCollectState.running then
+			countLabel.Text = "RUNNING"
+			countLabel.BackgroundColor3 = C_OK
+		else
+			countLabel.Text = "IDLE"
+			countLabel.BackgroundColor3 = C_ROW_HOT
+		end
+		countLabel.Size = UDim2.fromOffset(70, 22)
+		return
+	end
+
 	local count = activeTab.state.shownCount or 0
-	
 	if activeTab.name == "Items" then
 		countLabel.Text = count .. " spawned"
 		countLabel.Size = UDim2.fromOffset(75, 22)
+		countLabel.BackgroundColor3 = C_ACCENT
 	elseif activeTab.name == "Supplies" then
 		countLabel.Text = count .. " spawned"
 		countLabel.Size = UDim2.fromOffset(75, 22)
+		countLabel.BackgroundColor3 = C_ACCENT
 	elseif activeTab.name == "Cases" then
 		countLabel.Text = count .. " found"
 		countLabel.Size = UDim2.fromOffset(70, 22)
+		countLabel.BackgroundColor3 = C_ACCENT
 	elseif activeTab.name == "Scrap Barges" then
 		countLabel.Text = count .. " active"
 		countLabel.Size = UDim2.fromOffset(65, 22)
+		countLabel.BackgroundColor3 = C_ACCENT
 	else
 		countLabel.Text = "Total: " .. count
 		countLabel.Size = UDim2.fromOffset(60, 22)
+		countLabel.BackgroundColor3 = C_ACCENT
 	end
 end
 
@@ -1256,11 +1907,11 @@ local function showTab(tab)
 	for _, t in ipairs(tabs) do
 		local isSelected = (t == tab)
 		t.body.Visible = isSelected
-		
+
 		t.tabBtn.BackgroundColor3 = isSelected and C_PANEL or C_BG
 		t.tabBtn.TextColor3       = isSelected and C_TEXT   or C_SUB
 		t.tabBtn.Font             = isSelected and Enum.Font.GothamBold or Enum.Font.Gotham
-		
+
 		TweenService:Create(t.tabBtn, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Size = isSelected and UDim2.new(1, -20, 0, 36) or UDim2.new(1, -40, 0, 28)
 		}):Play()
@@ -1318,35 +1969,48 @@ do
 	end)
 end
 
--- Toggle Button Drag
-do
-	local dragging, dragStart, startPos
-	toggleBtn.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch then
-			dragging  = true
-			dragStart = input.Position
-			startPos  = toggleBtn.Position
+-- Toggle Button Drag & Click
+local toggleDragging = false
+local toggleDragStart = nil
+local toggleStartPos = nil
+local toggleHasMoved = false
+
+toggleBtn.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+	or input.UserInputType == Enum.UserInputType.Touch then
+		toggleDragging  = true
+		toggleHasMoved  = false
+		toggleDragStart = input.Position
+		toggleStartPos  = toggleBtn.Position
+	end
+end)
+
+toggleBtn.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+	or input.UserInputType == Enum.UserInputType.Touch then
+		toggleDragging = false
+		if not toggleHasMoved then
+			main.Visible = true
+			toggleBtn.Visible = false
 		end
-	end)
-	toggleBtn.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-		or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = false
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not toggleDragging then return end
+	if input.UserInputType == Enum.UserInputType.MouseMovement
+	or input.UserInputType == Enum.UserInputType.Touch then
+		local d = input.Position - toggleDragStart
+		if d.Magnitude > 5 then
+			toggleHasMoved = true
 		end
-	end)
-	UserInputService.InputChanged:Connect(function(input)
-		if not dragging then return end
-		if input.UserInputType == Enum.UserInputType.MouseMovement
-		or input.UserInputType == Enum.UserInputType.Touch then
-			local d = input.Position - dragStart
-			toggleBtn.Position = UDim2.new(
-				startPos.X.Scale, startPos.X.Offset + d.X,
-				startPos.Y.Scale, startPos.Y.Offset + d.Y
-			)
-		end
-	end)
-end
+
+		toggleBtn.Position = UDim2.new(
+			toggleStartPos.X.Scale, toggleStartPos.X.Offset + d.X,
+			toggleStartPos.Y.Scale, toggleStartPos.Y.Offset + d.Y
+		)
+	end
+end)
 
 local minimized     = false
 local expandedSize  = UDim2.fromOffset(480, 460)
@@ -1355,18 +2019,18 @@ local collapsedSize = UDim2.fromOffset(480, 36)
 minBtn.MouseButton1Click:Connect(function()
 	minimized = not minimized
 	minBtn.Text = minimized and "+" or "-"
-	
+
 	if minimized then
 		TweenService:Create(headerCorner, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			BottomLeftRadius = UDim.new(0, 10),
 			BottomRightRadius = UDim.new(0, 10)
 		}):Play()
-		
+
 		tabBar.Visible = false
 		separator.Visible = false
 		footer.Visible = false
 		for _, t in ipairs(tabs) do t.body.Visible = false end
-		
+
 		TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Size = collapsedSize
 		}):Play()
@@ -1375,11 +2039,11 @@ minBtn.MouseButton1Click:Connect(function()
 			BottomLeftRadius = UDim.new(0, 0),
 			BottomRightRadius = UDim.new(0, 0)
 		}):Play()
-		
+
 		TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Size = expandedSize
 		}):Play()
-		
+
 		task.delay(0.1, function()
 			if not minimized then
 				tabBar.Visible = true
@@ -1396,18 +2060,21 @@ closeBtn.MouseButton1Click:Connect(function()
 	toggleBtn.Visible = true
 end)
 
-toggleBtn.MouseButton1Click:Connect(function()
-	main.Visible = true
-	toggleBtn.Visible = false
-end)
-
 --=====================================================================
--- filter changes
+-- filter changes (Debounced for performance)
 --=====================================================================
 for _, tab in ipairs(tabs) do
-	tab.search:GetPropertyChangedSignal("Text"):Connect(function()
-		task.defer(tab.rebuild)
-	end)
+	if not tab.isAutoCollect then
+		local searchDebounce = false
+		tab.search:GetPropertyChangedSignal("Text"):Connect(function()
+			if searchDebounce then return end
+			searchDebounce = true
+			task.delay(0.2, function()
+				searchDebounce = false
+				tab.rebuild()
+			end)
+		end)
+	end
 end
 
 --=====================================================================
@@ -1417,6 +2084,7 @@ task.spawn(function()
 	while true do
 		task.wait(AUTO_REFRESH)
 		for _, tab in ipairs(tabs) do
+			if tab.isAutoCollect then continue end
 			if tab.state.rebuildQueued then continue end
 			local container = tab.getContainer()
 			if container ~= tab.state.lastContainer then
@@ -1447,6 +2115,7 @@ RunService.Heartbeat:Connect(function(dt)
 	if pollAcc >= POLL_RATE then
 		pollAcc = 0
 		for _, tab in ipairs(tabs) do
+			if tab.isAutoCollect then continue end
 			if tab.getContainer() ~= tab.state.lastContainer then
 				tab.rebuild()
 			end
@@ -1457,25 +2126,35 @@ RunService.Heartbeat:Connect(function(dt)
 	if textAcc < 1 / TEXT_HZ then return end
 	textAcc = 0
 
-	local ppos = playerPosition()
-	for _, tab in ipairs(tabs) do
-		for item, data in pairs(tab.state.rows) do
+	if activeTab and not activeTab.isAutoCollect then
+		local ppos = playerPosition()
+		for item, data in pairs(activeTab.state.rows) do
 			local p = data.part
 			if p and p:IsDescendantOf(workspace) then
-				if tab.state.showDistance then
+				if activeTab.state.showDistance then
 					local pos = p.Position
 					local txt = "Unknown distance"
 					if ppos then
 						txt = string.format("%d studs", math.round((pos - ppos).Magnitude))
 					end
-					data.info.Text = txt
+					if data.info.Text ~= txt then
+						data.info.Text = txt
+					end
 				else
-					data.info.Text = ""
+					if data.info.Text ~= "" then
+						data.info.Text = ""
+					end
 				end
-				data.tp.BackgroundColor3 = C_ACCENT
+				if data.tp.BackgroundColor3 ~= C_ACCENT then
+					data.tp.BackgroundColor3 = C_ACCENT
+				end
 			else
-				data.info.Text = "No BasePart found"
-				data.tp.BackgroundColor3 = C_ROW_HOT
+				if data.info.Text ~= "No BasePart found" then
+					data.info.Text = "No BasePart found"
+				end
+				if data.tp.BackgroundColor3 ~= C_ROW_HOT then
+					data.tp.BackgroundColor3 = C_ROW_HOT
+				end
 			end
 		end
 	end
@@ -1485,4 +2164,8 @@ end)
 -- go
 --=====================================================================
 showTab(tabs[1])
-for _, tab in ipairs(tabs) do tab.rebuild() end
+for _, tab in ipairs(tabs) do 
+	if not tab.isAutoCollect then
+		tab.rebuild() 
+	end
+end
