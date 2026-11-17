@@ -1,8 +1,10 @@
 --!nocheck
 --=====================================================================
--- Stand Out Dashboard v40
---   * Fixed Case sorting (1 to 10 numerical)
---   * Renamed "Meteors" tab to "World Events"
+-- Stand Out Dashboard v44
+--   * Fixed ESP breaking on respawn (Event-driven)
+--   * Replaced ON/OFF buttons with animated slide switches
+--   * Aligned all Misc tab UI elements (switches and textboxes)
+--   * Improved Noclip (fully disables physical and raycast collisions)
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -60,7 +62,8 @@ local STATIC_CASES = {
 
 local STATIC_TELEPORTS = {
 	{Label = "D'arby", Pos = Vector3.new(-1065, 19, 2270), Group = "Miscellaneous", Order = 1},
-	{Label = "Raids", Pos = Vector3.new(-514, 19, 1995), Group = "Raids", Order = 1},
+	{Label = "Rohan's Mansion", Pos = Vector3.new(1599, 35, 1605), Group = "Miscellaneous", Order = 2},
+	{Label = "Underworld (Raids)", Pos = Vector3.new(-514, 19, 1995), Group = "Raids", Order = 1},
 	{Label = "Construction Site", Pos = Vector3.new(-30, 19, 925), Group = "Raids", Order = 2},
 	{Label = "Museum of Oahu", Pos = Vector3.new(-850, 19, 1811), Group = "Raids", Order = 3},
 	{Label = "School + Iko Iko", Pos = Vector3.new(-1276, 19, 1122), Group = "Raids", Order = 4},
@@ -100,7 +103,7 @@ for _, data in ipairs(STATIC_TELEPORTS) do
 end
 
 --=====================================================================
--- Scrap Barges Radar (Optimized Event-Driven)
+-- Scrap Barges Radar
 --=====================================================================
 local scrapBeaconFolder = Instance.new("Folder")
 scrapBeaconFolder.Name = "SIM_ScrapBeacons"
@@ -459,7 +462,7 @@ local function notifySpawn(item, tabName)
 end
 
 --=====================================================================
--- highlight + pulsing marker (Optimized Global Loop)
+-- highlight + pulsing marker
 --=====================================================================
 local highlights = {}
 local activeMarkers = {}
@@ -591,6 +594,246 @@ local function returnToSaved()
 	savedPosition = nil
 	return true
 end
+
+--=====================================================================
+-- Misc Systems (ESP, Fly, Noclip, Walkspeed)
+--=====================================================================
+local espEnabled = false
+local showEspDistance = false
+local espData = {}
+
+local function removeESPForPlayer(p)
+	if espData[p] then
+		if espData[p].highlight then espData[p].highlight:Destroy() end
+		if espData[p].billboard then espData[p].billboard:Destroy() end
+		espData[p] = nil
+	end
+end
+
+local function createESPForPlayer(p)
+	if not espEnabled or p == LocalPlayer then return end
+	removeESPForPlayer(p)
+	
+	local char = p.Character
+	if not char then return end
+	local head = char:WaitForChild("Head", 5)
+	if not head then return end
+
+	local hl = Instance.new("Highlight")
+	hl.FillTransparency = 1
+	hl.OutlineColor = Color3.fromRGB(255, 0, 0)
+	hl.OutlineTransparency = 0
+	hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	hl.Adornee = char
+	hl.Parent = char
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "SIM_ESPName"
+	bb.Size = UDim2.new(0, 200, 0, 60)
+	bb.StudsOffset = Vector3.new(0, 2.5, 0)
+	bb.AlwaysOnTop = true
+	bb.Adornee = head
+	bb.Parent = head
+
+	local txtName = Instance.new("TextLabel")
+	txtName.Size = UDim2.new(1, 0, 0.5, 0)
+	txtName.Position = UDim2.new(0, 0, 0, 0)
+	txtName.BackgroundTransparency = 1
+	txtName.Text = p.Name
+	txtName.TextColor3 = Color3.fromRGB(255, 0, 0)
+	txtName.TextStrokeTransparency = 0
+	txtName.TextStrokeColor3 = Color3.new(0,0,0)
+	txtName.Font = Enum.Font.GothamBold
+	txtName.TextSize = 16
+	txtName.Parent = bb
+	
+	local txtDist = Instance.new("TextLabel")
+	txtDist.Size = UDim2.new(1, 0, 0.5, 0)
+	txtDist.Position = UDim2.new(0, 0, 0.5, 0)
+	txtDist.BackgroundTransparency = 1
+	txtDist.Text = ""
+	txtDist.TextColor3 = Color3.fromRGB(255, 0, 0)
+	txtDist.TextStrokeTransparency = 0
+	txtDist.TextStrokeColor3 = Color3.new(0,0,0)
+	txtDist.Font = Enum.Font.Gotham
+	txtDist.TextSize = 14
+	txtDist.Parent = bb
+
+	espData[p] = { highlight = hl, billboard = bb, txtDist = txtDist }
+end
+
+local function updateESP()
+	if not espEnabled then
+		for p, data in pairs(espData) do
+			removeESPForPlayer(p)
+		end
+		return
+	end
+	
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer then
+			if not espData[p] then
+				task.spawn(createESPForPlayer, p)
+			end
+		end
+	end
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+	if p ~= LocalPlayer then
+		p.CharacterAdded:Connect(function()
+			if espEnabled then
+				task.wait(0.5)
+				if espEnabled then createESPForPlayer(p) end
+			end
+		end)
+		p.CharacterRemoving:Connect(function()
+			removeESPForPlayer(p)
+		end)
+	end
+end
+
+Players.PlayerAdded:Connect(function(p)
+	p.CharacterAdded:Connect(function()
+		if espEnabled then
+			task.wait(0.5)
+			if espEnabled then createESPForPlayer(p) end
+		end
+	end)
+	p.CharacterRemoving:Connect(function()
+		removeESPForPlayer(p)
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+	removeESPForPlayer(p)
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		if espEnabled and showEspDistance then
+			local lhrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+			for p, data in pairs(espData) do
+				if p.Character and p.Character:FindFirstChild("HumanoidRootPart") and lhrp then
+					local dist = math.floor((lhrp.Position - p.Character.HumanoidRootPart.Position).Magnitude)
+					data.txtDist.Text = "[" .. dist .. " studs]"
+				end
+			end
+		elseif not showEspDistance then
+			for p, data in pairs(espData) do
+				data.txtDist.Text = ""
+			end
+		end
+	end
+end)
+
+-- Fly Logic
+local flyEnabled = false
+local flySpeed = 50
+
+local function toggleFly(state)
+	flyEnabled = state
+	local char = LocalPlayer.Character
+	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not state and hum then
+		hum.PlatformStand = false
+	end
+end
+
+LocalPlayer.CharacterAdded:Connect(function()
+	if flyEnabled then
+		flyEnabled = false
+	end
+end)
+
+RunService.RenderStepped:Connect(function(dt)
+	if flyEnabled then
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hrp and hum then
+			hum.PlatformStand = true
+			hrp.Velocity = Vector3.zero
+			
+			local cam = workspace.CurrentCamera
+			local moveDir = Vector3.zero
+			if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + cam.CFrame.LookVector end
+			if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - cam.CFrame.LookVector end
+			if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - cam.CFrame.RightVector end
+			if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + cam.CFrame.RightVector end
+			if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
+			if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir = moveDir - Vector3.new(0, 1, 0) end
+			
+			if moveDir.Magnitude > 0 then
+				hrp.CFrame = hrp.CFrame + (moveDir.Unit * flySpeed * dt)
+			end
+		end
+	end
+end)
+
+-- Noclip Logic
+local noclipEnabled = false
+
+local function toggleNoclip(state)
+	noclipEnabled = state
+	if not state then
+		local char = LocalPlayer.Character
+		if char then
+			for _, p in ipairs(char:GetDescendants()) do
+				if p:IsA("BasePart") then
+					p.CanCollide = true
+					p.CanQuery = true
+					p.CanTouch = true
+				end
+			end
+		end
+	end
+end
+
+RunService.Stepped:Connect(function()
+	if noclipEnabled then
+		local char = LocalPlayer.Character
+		if char then
+			for _, p in ipairs(char:GetDescendants()) do
+				if p:IsA("BasePart") then
+					p.CanCollide = false
+					p.CanQuery = false
+					p.CanTouch = false
+				end
+			end
+		end
+	end
+end)
+
+-- Walkspeed Logic
+local wsEnabled = false
+local wsSpeed = 16
+
+local function applyWalkspeed()
+	if not wsEnabled then return end
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum.WalkSpeed = wsSpeed
+	end
+end
+
+local function toggleWalkspeed(state)
+	wsEnabled = state
+	if not state then
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then hum.WalkSpeed = 16 end
+	else
+		applyWalkspeed()
+	end
+end
+
+RunService.Stepped:Connect(function()
+	if wsEnabled then applyWalkspeed() end
+end)
 
 --=====================================================================
 -- GUI shell
@@ -1011,7 +1254,7 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, position, 
 	labelLbl.Parent = container
 
 	local sliderFrame = Instance.new("Frame")
-	sliderFrame.Size = UDim2.new(1, -65, 0, 20)
+	sliderFrame.Size = UDim2.new(1, -68, 0, 20)
 	sliderFrame.Position = UDim2.new(0, 0, 0, 18)
 	sliderFrame.BackgroundTransparency = 1
 	sliderFrame.Parent = container
@@ -1040,8 +1283,8 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, position, 
 	corner(thumb, 8)
 
 	local textBox = Instance.new("TextBox")
-	textBox.Size = UDim2.fromOffset(50, 26)
-	textBox.Position = UDim2.new(1, -55, 0.5, -13)
+	textBox.Size = UDim2.fromOffset(50, 24)
+	textBox.Position = UDim2.new(1, -58, 0.5, -12)
 	textBox.BackgroundColor3 = C_PANEL
 	textBox.TextColor3 = C_TEXT
 	textBox.Font = Enum.Font.Gotham
@@ -1093,6 +1336,58 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, position, 
 	end)
 
 	setValue(defaultVal)
+end
+
+local function buildToggle(parent, label, position, defaultState, onChange)
+	local container = Instance.new("Frame")
+	container.Size = UDim2.new(1, -20, 0, 30)
+	container.Position = position
+	container.BackgroundTransparency = 1
+	container.Parent = parent
+
+	local labelLbl = Instance.new("TextLabel")
+	labelLbl.Text = label
+	labelLbl.Font = Enum.Font.GothamBold
+	labelLbl.TextSize = 11
+	labelLbl.TextColor3 = C_SUB
+	labelLbl.BackgroundTransparency = 1
+	labelLbl.Size = UDim2.new(1, -60, 1, 0)
+	labelLbl.TextXAlignment = Enum.TextXAlignment.Left
+	labelLbl.Parent = container
+
+	local switchBg = Instance.new("Frame")
+	switchBg.Size = UDim2.fromOffset(40, 20)
+	switchBg.Position = UDim2.new(1, -48, 0.5, -10)
+	switchBg.BackgroundColor3 = defaultState and C_OK or C_ROW_HOT
+	switchBg.BorderSizePixel = 0
+	switchBg.Parent = container
+	corner(switchBg, 10)
+
+	local thumb = Instance.new("Frame")
+	thumb.Size = UDim2.fromOffset(16, 16)
+	thumb.Position = defaultState and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+	thumb.BackgroundColor3 = C_TEXT
+	thumb.BorderSizePixel = 0
+	thumb.Parent = switchBg
+	corner(thumb, 8)
+
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1, 0, 1, 0)
+	btn.BackgroundTransparency = 1
+	btn.Text = ""
+	btn.Parent = switchBg
+
+	local state = defaultState
+	btn.MouseButton1Click:Connect(function()
+		state = not state
+		switchBg.BackgroundColor3 = state and C_OK or C_ROW_HOT
+		TweenService:Create(thumb, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+		}):Play()
+		if onChange then onChange(state) end
+	end)
+	
+	if onChange then onChange(state) end
 end
 
 --=====================================================================
@@ -1347,7 +1642,7 @@ end)
 -- tab configs
 --=====================================================================
 tabs = {
-	{ name = "Items", emptyText = "No items spawned", autoHighlight = true, notify = true,
+	{ name = "Items", emptyText = "No items spawned", autoHighlight = false, notify = true,
 		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("SpawnedItems") end, },
 	{ name = "Supplies", emptyText = "No supplies spawned", autoHighlight = false, notify = true,
 		getContainer = function() local g = workspace:FindFirstChild("Game"); local gar = g and g:FindFirstChild("Gardening"); return gar and gar:FindFirstChild("Foraging") end, },
@@ -1360,6 +1655,7 @@ tabs = {
 	{ name = "World Events", emptyText = "No world event drops found.", autoHighlight = false, notify = true,
 		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("WorldEventDrops") end, },
 	{ name = "Auto Collect", isAutoCollect = true, },
+	{ name = "Miscellaneous", isMisc = true, },
 }
 
 local function buildTabBtn(tab, index, parentFrame)
@@ -1487,6 +1783,69 @@ local function buildTabBody(tab, parentFrame)
 	tab.empty  = empty
 end
 
+local function buildMiscBody(tab, parentFrame)
+	local body = Instance.new("Frame")
+	body.Position              = UDim2.fromOffset(140, 36)
+	body.Size                  = UDim2.new(1, -140, 1, -80)
+	body.BackgroundTransparency= 1
+	body.Visible               = false
+	body.Parent                = parentFrame
+
+	local lblVisuals = Instance.new("TextLabel")
+	lblVisuals.Text = "Visuals"
+	lblVisuals.Font = Enum.Font.GothamBold
+	lblVisuals.TextSize = 12
+	lblVisuals.TextColor3 = C_ACCENT
+	lblVisuals.BackgroundTransparency = 1
+	lblVisuals.Position = UDim2.fromOffset(10, 10)
+	lblVisuals.Size = UDim2.new(1, -20, 0, 20)
+	lblVisuals.TextXAlignment = Enum.TextXAlignment.Left
+	lblVisuals.Parent = body
+
+	buildToggle(body, "Player ESP", UDim2.fromOffset(10, 35), false, function(state)
+		espEnabled = state
+		updateESP()
+	end)
+
+	buildToggle(body, "ESP Distance", UDim2.fromOffset(10, 75), false, function(state)
+		showEspDistance = state
+	end)
+
+	local lblMove = Instance.new("TextLabel")
+	lblMove.Text = "Movement"
+	lblMove.Font = Enum.Font.GothamBold
+	lblMove.TextSize = 12
+	lblMove.TextColor3 = C_ACCENT
+	lblMove.BackgroundTransparency = 1
+	lblMove.Position = UDim2.fromOffset(10, 125)
+	lblMove.Size = UDim2.new(1, -20, 0, 20)
+	lblMove.TextXAlignment = Enum.TextXAlignment.Left
+	lblMove.Parent = body
+
+	buildToggle(body, "Fly (WASD + Space/Shift)", UDim2.fromOffset(10, 150), false, function(state)
+		toggleFly(state)
+	end)
+
+	buildSlider(body, "Fly Speed", 10, 500, 50, UDim2.fromOffset(10, 190), true, function(val)
+		flySpeed = val
+	end)
+
+	buildToggle(body, "Noclip", UDim2.fromOffset(10, 250), false, function(state)
+		toggleNoclip(state)
+	end)
+
+	buildToggle(body, "Walkspeed", UDim2.fromOffset(10, 290), false, function(state)
+		toggleWalkspeed(state)
+	end)
+
+	buildSlider(body, "Walkspeed Value", 16, 300, 16, UDim2.fromOffset(10, 330), true, function(val)
+		wsSpeed = val
+	end)
+
+	tab.body = body
+	tab.state = { shownCount = 0 }
+end
+
 local function buildAutoCollectBody(tab, parentFrame)
 	local body = Instance.new("Frame")
 	body.Position              = UDim2.fromOffset(140, 36)
@@ -1593,6 +1952,8 @@ for i, tab in ipairs(tabs) do
 	tab.tabBtn = buildTabBtn(tab, i - 1, tabBar)
 	if tab.isAutoCollect then
 		buildAutoCollectBody(tab, main)
+	elseif tab.isMisc then
+		buildMiscBody(tab, main)
 	else
 		buildTabBody(tab, main)
 	end
@@ -1645,8 +2006,8 @@ local function createManager(tab)
 		end
 
 		local rightMargin = -8
-		local hasHL   = not tab.autoHighlight
-		local hasCopy = (tab.name == "Cases" or tab.name == "Teleports" or tab.name == "Scrap Barges" or tab.name == "World Events")
+		local hasHL   = true
+		local hasCopy = (tab.name == "Teleports" or tab.name == "Scrap Barges" or tab.name == "World Events")
 
 		if hasCopy then rightMargin = rightMargin - 40 - 6 end
 		if hasHL   then rightMargin = rightMargin - 34 - 6 end
@@ -1834,7 +2195,7 @@ local function createManager(tab)
 			end
 		end
 
-		-- Sorting logic (Fixing cases to sort numerically)
+		-- Sorting logic
 		table.sort(entries, function(a, b)
 			if tab.name == "Cases" then
 				local numA = tonumber(a.Name:match("%d+")) or 0
@@ -1955,7 +2316,7 @@ local function createManager(tab)
 end
 
 for _, tab in ipairs(tabs) do
-	if not tab.isAutoCollect then
+	if not tab.isAutoCollect and not tab.isMisc then
 		createManager(tab)
 	end
 end
@@ -1975,6 +2336,11 @@ updateCountLabel = function()
 			countLabel.BackgroundColor3 = C_ROW_HOT
 		end
 		countLabel.Size = UDim2.fromOffset(70, 22)
+		return
+	elseif activeTab.isMisc then
+		countLabel.Text = "TOOLS"
+		countLabel.BackgroundColor3 = C_ACCENT
+		countLabel.Size = UDim2.fromOffset(60, 22)
 		return
 	end
 
@@ -2166,7 +2532,7 @@ end)
 -- filter changes (Debounced)
 --=====================================================================
 for _, tab in ipairs(tabs) do
-	if not tab.isAutoCollect then
+	if not tab.isAutoCollect and not tab.isMisc then
 		local searchDebounce = false
 		tab.search:GetPropertyChangedSignal("Text"):Connect(function()
 			if searchDebounce then return end
@@ -2191,7 +2557,7 @@ end
 task.spawn(function()
 	while true do
 		task.wait(1 / TEXT_HZ)
-		if activeTab and not activeTab.isAutoCollect then
+		if activeTab and not activeTab.isAutoCollect and not activeTab.isMisc then
 			local ppos = playerPosition()
 			for item, data in pairs(activeTab.state.rows) do
 				local p = data.part
@@ -2232,7 +2598,7 @@ task.spawn(function()
 	while true do
 		task.wait(1.5)
 		for _, tab in ipairs(tabs) do
-			if tab.isAutoCollect then continue end
+			if tab.isAutoCollect or tab.isMisc then continue end
 			if tab.getContainer() ~= tab.state.lastContainer then
 				tab.rebuild()
 			end
@@ -2245,7 +2611,7 @@ end)
 --=====================================================================
 showTab(tabs[1])
 for _, tab in ipairs(tabs) do 
-	if not tab.isAutoCollect then
+	if not tab.isAutoCollect and not tab.isMisc then
 		tab.rebuild() 
 	end
 end
