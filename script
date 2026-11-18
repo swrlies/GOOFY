@@ -1,10 +1,12 @@
 --!nocheck
 --=====================================================================
--- Stand Out Dashboard v44
---   * Fixed ESP breaking on respawn (Event-driven)
---   * Replaced ON/OFF buttons with animated slide switches
---   * Aligned all Misc tab UI elements (switches and textboxes)
---   * Improved Noclip (fully disables physical and raycast collisions)
+-- Stand Out Dashboard v47 (Madium + Xeno compatible)
+--   * Noclip rewritten with a reliable Stepped loop (works on both)
+--   * Fly improved (camera-locked, smooth, respawn-safe)
+--   * Auto Collect FIXED (simulateKey + getCollectAction were MISSING)
+--   * Tween movement rewritten (no more stuck-anchor bug)
+--   * Teleport robust for supplies/barges (GetPivot fallback)
+--   * Added: Gardening, Mechanic, YoYo-Ma Fight teleports
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -13,6 +15,7 @@ local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService     = game:GetService("TweenService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera      = workspace.CurrentCamera
@@ -42,32 +45,35 @@ local HL_OUTLINE = Color3.fromRGB(255, 255, 255)
 
 local activeTab
 local updateCountLabel
-local tabs = {}   
+local tabs = {}
 
 --=====================================================================
 -- STATIC COORDINATES
 --=====================================================================
 local STATIC_CASES = {
-	Vector3.new(-854.96, 16.88, 1425.11),  -- 1
-	Vector3.new(-791.88, 16.51, 697.80),   -- 2
-	Vector3.new(-233.61, 16.16, 1043.10),  -- 3
-	Vector3.new(-777.55, 33.44, 2595.58),  -- 4
-	Vector3.new(-1344.33, 16.82, 2185.03), -- 5
-	Vector3.new(-1846.07, 16.03, 1206.89), -- 6
-	Vector3.new(-2248.65, 14.63, 823.82),  -- 7
-	Vector3.new(185.34, 17.44, 1717.25),   -- 8
-	Vector3.new(179.49, 17.44, 1045.49),   -- 9
-	Vector3.new(2378.16, 25.62, 1325.02),  -- 10
+	Vector3.new(-854.96, 16.88, 1425.11),
+	Vector3.new(-791.88, 16.51, 697.80),
+	Vector3.new(-233.61, 16.16, 1043.10),
+	Vector3.new(-777.55, 33.44, 2595.58),
+	Vector3.new(-1344.33, 16.82, 2185.03),
+	Vector3.new(-1846.07, 16.03, 1206.89),
+	Vector3.new(-2248.65, 14.63, 823.82),
+	Vector3.new(185.34, 17.44, 1717.25),
+	Vector3.new(179.49, 17.44, 1045.49),
+	Vector3.new(2378.16, 25.62, 1325.02),
 }
 
 local STATIC_TELEPORTS = {
 	{Label = "D'arby", Pos = Vector3.new(-1065, 19, 2270), Group = "Miscellaneous", Order = 1},
 	{Label = "Rohan's Mansion", Pos = Vector3.new(1599, 35, 1605), Group = "Miscellaneous", Order = 2},
+	{Label = "Gardening", Pos = Vector3.new(-1776, 31, 837), Group = "Miscellaneous", Order = 3},
+	{Label = "Mechanic", Pos = Vector3.new(-542, 20, 1283), Group = "Miscellaneous", Order = 4},
 	{Label = "Underworld (Raids)", Pos = Vector3.new(-514, 19, 1995), Group = "Raids", Order = 1},
 	{Label = "Construction Site", Pos = Vector3.new(-30, 19, 925), Group = "Raids", Order = 2},
 	{Label = "Museum of Oahu", Pos = Vector3.new(-850, 19, 1811), Group = "Raids", Order = 3},
 	{Label = "School + Iko Iko", Pos = Vector3.new(-1276, 19, 1122), Group = "Raids", Order = 4},
 	{Label = "Swat Car", Pos = Vector3.new(-457, 19, 1578), Group = "Raids", Order = 5},
+	{Label = "YoYo-Ma Fight", Pos = Vector3.new(-305, 20, 1488), Group = "Raids", Order = 6},
 }
 
 local caseBeaconFolder = Instance.new("Folder")
@@ -201,7 +207,7 @@ local function setupMapListeners()
 			scheduleScrapUpdate()
 		end
 	end))
-	
+
 	table.insert(mapListenerConns, mapFolder.DescendantRemoving:Connect(function(obj)
 		if obj.Name == "DebrisPiece" then
 			scrapPieces[obj] = nil
@@ -221,7 +227,7 @@ task.spawn(function()
 		if #mapListenerConns == 0 then
 			setupMapListeners()
 		end
-		task.wait(5)   
+		task.wait(5)
 	end
 end)
 
@@ -276,9 +282,13 @@ end)
 -- helpers
 --=====================================================================
 local function getPart(inst)
+	if not inst then return nil end
 	if inst:IsA("BasePart") then return inst end
 	if inst:IsA("Model") then
 		return inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+	end
+	if inst:IsA("Folder") then
+		return inst:FindFirstChildWhichIsA("BasePart", true)
 	end
 	return inst:FindFirstChildWhichIsA("BasePart", true)
 end
@@ -327,7 +337,7 @@ local function getDisplayName(item, tabName)
 end
 
 --=====================================================================
--- ANTI-FAKE: Mysterious Arrow Verification
+-- ANTI-FAKE
 --=====================================================================
 local function isValidItem(item, tabName)
 	if tabName ~= "Items" then return true end
@@ -344,7 +354,7 @@ local function isValidItem(item, tabName)
 		if not part then return false end
 		local pos = part.Position
 
-		for _, node in arrowsFolder:GetChildren() do
+		for _, node in ipairs(arrowsFolder:GetChildren()) do
 			if node.Name:match("^Arrow0%d$") then
 				local nodePos = node:IsA("BasePart") and node.Position or node:GetPivot().Position
 				if (nodePos - pos).Magnitude <= 10 then
@@ -561,7 +571,7 @@ local function clearHighlight(item)
 end
 
 --=====================================================================
--- teleport / return
+-- teleport / return (robust)
 --=====================================================================
 local savedPosition = nil
 
@@ -569,20 +579,31 @@ LocalPlayer.CharacterAdded:Connect(function()
 	savedPosition = nil
 end)
 
+local function getItemPosition(item)
+	local part = getPart(item)
+	if part then return part.Position end
+	if item and item:IsA("Model") then
+		local ok, cf = pcall(function() return item:GetPivot() end)
+		if ok and cf then return cf.Position end
+	end
+	return nil
+end
+
 local function teleportToPosition(targetPos)
 	local char = LocalPlayer.Character
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return false, "Character not available." end
 	if not savedPosition then savedPosition = hrp.CFrame end
+	hrp.Anchored = false
 	hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
 	Camera.CameraType = Enum.CameraType.Custom
 	return true
 end
 
 local function teleportToItem(item)
-	local part = getPart(item)
-	if not part then return false, "Item has no BasePart." end
-	return teleportToPosition(part.Position)
+	local pos = getItemPosition(item)
+	if not pos then return false, "Item has no position." end
+	return teleportToPosition(pos)
 end
 
 local function returnToSaved()
@@ -590,13 +611,14 @@ local function returnToSaved()
 	local char = LocalPlayer.Character
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 	if not char or not hrp then return false, "Character not available." end
+	hrp.Anchored = false
 	hrp.CFrame = savedPosition
 	savedPosition = nil
 	return true
 end
 
 --=====================================================================
--- Misc Systems (ESP, Fly, Noclip, Walkspeed)
+-- Misc Systems
 --=====================================================================
 local espEnabled = false
 local showEspDistance = false
@@ -613,7 +635,7 @@ end
 local function createESPForPlayer(p)
 	if not espEnabled or p == LocalPlayer then return end
 	removeESPForPlayer(p)
-	
+
 	local char = p.Character
 	if not char then return end
 	local head = char:WaitForChild("Head", 5)
@@ -646,7 +668,7 @@ local function createESPForPlayer(p)
 	txtName.Font = Enum.Font.GothamBold
 	txtName.TextSize = 16
 	txtName.Parent = bb
-	
+
 	local txtDist = Instance.new("TextLabel")
 	txtDist.Size = UDim2.new(1, 0, 0.5, 0)
 	txtDist.Position = UDim2.new(0, 0, 0.5, 0)
@@ -669,7 +691,7 @@ local function updateESP()
 		end
 		return
 	end
-	
+
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= LocalPlayer then
 			if not espData[p] then
@@ -728,83 +750,84 @@ task.spawn(function()
 	end
 end)
 
--- Fly Logic
+--=====================================================================
+-- Fly (improved)
+--=====================================================================
 local flyEnabled = false
 local flySpeed = 50
 
 local function toggleFly(state)
 	flyEnabled = state
 	local char = LocalPlayer.Character
-	if not char then return end
-	local hum = char:FindFirstChildOfClass("Humanoid")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	if not state and hum then
 		hum.PlatformStand = false
+	end
+	if state then
+		Camera.CameraType = Enum.CameraType.Custom
 	end
 end
 
 LocalPlayer.CharacterAdded:Connect(function()
 	if flyEnabled then
-		flyEnabled = false
+		task.wait(0.3)
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then hum.PlatformStand = true end
 	end
 end)
 
 RunService.RenderStepped:Connect(function(dt)
-	if flyEnabled then
-		local char = LocalPlayer.Character
-		local hrp = char and char:FindFirstChild("HumanoidRootPart")
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		if hrp and hum then
-			hum.PlatformStand = true
-			hrp.Velocity = Vector3.zero
-			
-			local cam = workspace.CurrentCamera
-			local moveDir = Vector3.zero
-			if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + cam.CFrame.LookVector end
-			if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - cam.CFrame.LookVector end
-			if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - cam.CFrame.RightVector end
-			if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + cam.CFrame.RightVector end
-			if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
-			if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir = moveDir - Vector3.new(0, 1, 0) end
-			
-			if moveDir.Magnitude > 0 then
-				hrp.CFrame = hrp.CFrame + (moveDir.Unit * flySpeed * dt)
-			end
-		end
+	if not flyEnabled then return end
+	local char = LocalPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hrp or not hum then return end
+
+	hum.PlatformStand = true
+	Camera.CameraType = Enum.CameraType.Custom
+
+	local cam = workspace.CurrentCamera
+	local moveDir = Vector3.zero
+	if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += cam.CFrame.LookVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= cam.CFrame.LookVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= cam.CFrame.RightVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += cam.CFrame.RightVector end
+	if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
+	if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
+
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	if moveDir.Magnitude > 0 then
+		hrp.CFrame = hrp.CFrame + (moveDir.Unit * flySpeed * dt)
 	end
 end)
 
--- Noclip Logic
+--=====================================================================
+-- Noclip (reliable Stepped loop — works on Xeno + Madium)
+--=====================================================================
 local noclipEnabled = false
 
-local function toggleNoclip(state)
-	noclipEnabled = state
-	if not state then
-		local char = LocalPlayer.Character
-		if char then
-			for _, p in ipairs(char:GetDescendants()) do
-				if p:IsA("BasePart") then
-					p.CanCollide = true
-					p.CanQuery = true
-					p.CanTouch = true
-				end
-			end
+local function setCharCollide(char, collide)
+	if not char then return end
+	for _, p in ipairs(char:GetDescendants()) do
+		if p:IsA("BasePart") then
+			p.CanCollide = collide
+			p.CanQuery   = collide
+			p.CanTouch   = collide
 		end
 	end
 end
 
-RunService.Stepped:Connect(function()
-	if noclipEnabled then
-		local char = LocalPlayer.Character
-		if char then
-			for _, p in ipairs(char:GetDescendants()) do
-				if p:IsA("BasePart") then
-					p.CanCollide = false
-					p.CanQuery = false
-					p.CanTouch = false
-				end
-			end
-		end
+local function toggleNoclip(state)
+	noclipEnabled = state
+	if not state then
+		setCharCollide(LocalPlayer.Character, true)
 	end
+end
+
+RunService.Stepped:Connect(function()
+	if not noclipEnabled then return end
+	setCharCollide(LocalPlayer.Character, false)
 end)
 
 -- Walkspeed Logic
@@ -1386,12 +1409,12 @@ local function buildToggle(parent, label, position, defaultState, onChange)
 		}):Play()
 		if onChange then onChange(state) end
 	end)
-	
+
 	if onChange then onChange(state) end
 end
 
 --=====================================================================
--- Auto Collect Logic
+-- Auto Collect Logic  (FIXED)
 --=====================================================================
 local autoCollectState = {
 	running      = false,
@@ -1399,12 +1422,53 @@ local autoCollectState = {
 	mode         = "Teleport",
 	collected    = {},
 	attempts     = {},
-	currentTween = nil,
 	busy         = false,
 	statusTab    = nil,
 	tweenSpeed   = 250,
 	delayTime    = 0,
+	cancelMove   = nil,
 }
+
+-- KEY SIMULATION (was missing entirely!)
+local function simulateKey(key, holdTime)
+	holdTime = holdTime or 0.06
+	-- Prefer executor keypress/keyrelease (madium + xeno both support)
+	if keypress and keyrelease then
+		local ok = pcall(function()
+			keypress(key)
+			task.wait(holdTime)
+			keyrelease(key)
+		end)
+		if ok then return true end
+	end
+	-- Fallback: VirtualInputManager (universal)
+	local kc = Enum.KeyCode[key]
+	if not kc then return false end
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(true, kc, false, false)
+	end)
+	task.wait(holdTime)
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(false, kc, false, false)
+	end)
+	return true
+end
+
+-- COLLECT ACTION (was missing entirely!)
+-- Arrows  : quick H tap
+-- Supplies: hold H (repeat, since game sometimes needs multiple holds)
+-- Scrap   : R heavy hit (no Stand needed per your notes)
+local function getCollectAction(item, catName)
+	if catName == "Buried Supplies" then
+		return {key = "H", holdTime = 0.8, multiHolds = 2, hint = "Holding H for supplies..."}
+	elseif catName == "Scrap Barges" then
+		return {key = "R", holdTime = 0.1, multiHolds = 1}
+	elseif catName == "World Events" then
+		return {key = "H", holdTime = 0.08, multiHolds = 1}
+	else
+		return {key = "H", holdTime = 0.08, multiHolds = 1}
+	end
+end
 
 local function getItemsForCategory(catName)
 	local items = {}
@@ -1441,79 +1505,51 @@ local function getItemsForCategory(catName)
 	return items
 end
 
-local function tweenToItem(item, onComplete)
+-- Simple loop-based tween (replaces old TweenService impl that left HRP anchored on cancel)
+local function moveToItem(item, onComplete)
 	local part = getPart(item)
 	if not part then
 		if onComplete then onComplete(false) end
-		return false, 0
+		return false
 	end
 	local char = LocalPlayer.Character
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 	if not hrp then
 		if onComplete then onComplete(false) end
-		return false, 0
-	end
-
-	if autoCollectState.currentTween then
-		pcall(function() autoCollectState.currentTween:Cancel() end)
-		autoCollectState.currentTween = nil
+		return false
 	end
 
 	local startCF = hrp.CFrame
 	local endCF   = CFrame.new(part.Position + Vector3.new(0, 3, 0))
-	local cframeVal = Instance.new("CFrameValue")
-	cframeVal.Value = startCF
+	local dist    = (startCF.Position - endCF.Position).Magnitude
+	local duration = math.max(0.05, dist / math.max(1, autoCollectState.tweenSpeed))
 
 	hrp.Anchored = true
-
-	local dist = (startCF.Position - endCF.Position).Magnitude
-	local duration = math.max(0.05, dist / autoCollectState.tweenSpeed)
-
-	local tween = TweenService:Create(cframeVal, TweenInfo.new(duration, Enum.EasingStyle.Linear), {Value = endCF})
-	autoCollectState.currentTween = tween
-
-	local finished = false
 	local cancelled = false
-	local conn
+	autoCollectState.cancelMove = function() cancelled = true end
 
-	local function finalize(success)
-		if finished then return end
-		finished = true
-
-		if conn then
-			conn:Disconnect()
-			conn = nil
+	local t0 = os.clock()
+	while os.clock() - t0 < duration do
+		if cancelled or not autoCollectState.running then
+			cancelled = true
+			break
 		end
+		local alpha = math.clamp((os.clock() - t0) / duration, 0, 1)
 		if hrp and hrp.Parent then
-			hrp.Anchored = false
+			hrp.CFrame = startCF:Lerp(endCF, alpha)
 		end
-		if cframeVal and cframeVal.Parent then
-			cframeVal:Destroy()
-		end
-		if autoCollectState.currentTween == tween then
-			autoCollectState.currentTween = nil
-		end
-		if onComplete then onComplete(success and not cancelled) end
+		task.wait()
 	end
 
-	conn = cframeVal.Changed:Connect(function(val)
-		if finished then return end
-		if not autoCollectState.running then
-			cancelled = true
-			pcall(function() tween:Cancel() end)
-			return
+	autoCollectState.cancelMove = nil
+	if hrp and hrp.Parent then
+		if not cancelled and autoCollectState.running then
+			hrp.CFrame = endCF
 		end
-		if hrp and hrp.Parent then
-			hrp.CFrame = val
-		end
-	end)
-
-	tween.Completed:Connect(function()
-		finalize(true)
-	end)
-
-	tween:Play()
-	return true, duration
+		hrp.Anchored = false
+	end
+	if onComplete then onComplete(not cancelled) end
+	return true
 end
 
 task.spawn(function()
@@ -1542,9 +1578,9 @@ task.spawn(function()
 			local items = getItemsForCategory(targetName)
 			for _, item in ipairs(items) do
 				if not autoCollectState.collected[item] and item:IsDescendantOf(workspace) then
-					local part = getPart(item)
-					if part then
-						table.insert(available, {item = item, pos = part.Position})
+					local pos = getItemPosition(item)
+					if pos then
+						table.insert(available, {item = item, pos = pos, catName = targetName})
 					end
 				end
 			end
@@ -1563,7 +1599,9 @@ task.spawn(function()
 			return (a.pos - ppos).Magnitude < (b.pos - ppos).Magnitude
 		end)
 
-		local targetItem = available[1].item
+		local targetData = available[1]
+		local targetItem = targetData.item
+		local targetCat  = targetData.catName
 		local name       = getDisplayName(targetItem, "Items")
 
 		if autoCollectState.statusTab and autoCollectState.statusTab.status then
@@ -1573,27 +1611,22 @@ task.spawn(function()
 
 		autoCollectState.busy = true
 
+		local distToTarget = (targetData.pos - hrp.Position).Magnitude
 		local moved = false
-		if autoCollectState.mode == "Teleport" then
-			local ok = teleportToItem(targetItem)
-			moved = ok == true
-			if moved then
-				task.wait(TELEPORT_SETTLE)
+
+		if distToTarget > 15 then
+			if autoCollectState.mode == "Teleport" then
+				local ok = teleportToItem(targetItem)
+				moved = ok == true
+				if moved then task.wait(TELEPORT_SETTLE) end
+			elseif autoCollectState.mode == "Tween" then
+				local done, ok = false, false
+				moveToItem(targetItem, function(s) done = true; ok = s end)
+				moved = ok
+				if moved then task.wait(TWEEN_SETTLE) end
 			end
-		elseif autoCollectState.mode == "Tween" then
-			local done, ok = false, false
-			local _, tweenDur = tweenToItem(targetItem, function(success)
-				done = true
-				ok   = success
-			end)
-			local t0 = os.clock()
-			while not done and autoCollectState.running and (os.clock() - t0) < ((tweenDur or 5) + 2) do
-				task.wait(0.05)
-			end
-			moved = ok
-			if moved then
-				task.wait(TWEEN_SETTLE)
-			end
+		else
+			moved = true
 		end
 
 		if not autoCollectState.running then
@@ -1601,10 +1634,32 @@ task.spawn(function()
 			continue
 		end
 
+		if moved and targetItem:IsDescendantOf(workspace) then
+			local action = getCollectAction(targetItem, targetCat)
+			if action then
+				if autoCollectState.statusTab and autoCollectState.statusTab.status then
+					if action.hint then
+						autoCollectState.statusTab.status.Text = action.hint
+						autoCollectState.statusTab.status.TextColor3 = C_WARN
+					else
+						autoCollectState.statusTab.status.Text = "Pressing " .. action.key .. " for " .. name
+						autoCollectState.statusTab.status.TextColor3 = C_OK
+					end
+				end
+
+				for i = 1, (action.multiHolds or 1) do
+					if not targetItem:IsDescendantOf(workspace) then break end
+					if not autoCollectState.running then break end
+					simulateKey(action.key, action.holdTime)
+					task.wait(0.25)
+				end
+			end
+		end
+
 		if not targetItem:IsDescendantOf(workspace) then
 			autoCollectState.collected[targetItem] = true
 			autoCollectState.attempts[targetItem]  = nil
-			
+
 			if autoCollectState.delayTime and autoCollectState.delayTime > 0 then
 				if autoCollectState.statusTab and autoCollectState.statusTab.status then
 					autoCollectState.statusTab.status.Text = string.format("Waiting %.1fs...", autoCollectState.delayTime)
@@ -1855,10 +1910,10 @@ local function buildAutoCollectBody(tab, parentFrame)
 	body.Parent                = parentFrame
 
 	local infoLbl = Instance.new("TextLabel")
-	infoLbl.Text = "Configure your auto-collect targets and movement below."
+	infoLbl.Text = "Auto-presses H (arrows/supplies) and R (scrap). No Stand needed for scrap!"
 	infoLbl.Font = Enum.Font.Gotham
 	infoLbl.TextSize = 11
-	infoLbl.TextColor3 = C_SUB
+	infoLbl.TextColor3 = C_WARN
 	infoLbl.BackgroundTransparency = 1
 	infoLbl.TextXAlignment = Enum.TextXAlignment.Left
 	infoLbl.TextWrapped = true
@@ -1926,10 +1981,15 @@ local function buildAutoCollectBody(tab, parentFrame)
 			status.Text = "Status: Running"
 			status.TextColor3 = C_OK
 		else
-			if autoCollectState.currentTween then
-				pcall(function() autoCollectState.currentTween:Cancel() end)
-				autoCollectState.currentTween = nil
+			-- cancel any in-flight tween movement
+			if autoCollectState.cancelMove then
+				autoCollectState.cancelMove()
+				autoCollectState.cancelMove = nil
 			end
+			-- safety: ensure not anchored
+			local c = LocalPlayer.Character
+			local h = c and c:FindFirstChild("HumanoidRootPart")
+			if h then h.Anchored = false end
 			autoCollectState.busy = false
 
 			startBtn.Text = "Start Auto Collect"
@@ -1960,7 +2020,7 @@ for i, tab in ipairs(tabs) do
 end
 
 --=====================================================================
--- manager factory (Optimized UI updating)
+-- manager factory
 --=====================================================================
 local function createManager(tab)
 	local state = {
@@ -2078,9 +2138,12 @@ local function createManager(tab)
 				if highlights[item] then
 					clearHighlight(item)
 					hlBtn.BackgroundColor3 = C_ROW_HOT
-				elseif part and part:IsDescendantOf(workspace) then
-					applyHighlight(item, part)
-					hlBtn.BackgroundColor3 = C_ACCENT
+				else
+					local p = getPart(item)
+					if p and p:IsDescendantOf(workspace) then
+						applyHighlight(item, p)
+						hlBtn.BackgroundColor3 = C_ACCENT
+					end
 				end
 			end)
 		end
@@ -2099,8 +2162,8 @@ local function createManager(tab)
 			corner(copyBtn, 5)
 
 			copyBtn.MouseButton1Click:Connect(function()
-				if part then
-					local pos = part.Position
+				local pos = getItemPosition(item)
+				if pos then
 					local text = string.format("%.2f, %.2f, %.2f", pos.X, pos.Y, pos.Z)
 					if setclipboard then
 						pcall(setclipboard, text)
@@ -2134,7 +2197,7 @@ local function createManager(tab)
 				tab.status.Text       = "Teleported to: " .. displayName
 				tab.status.TextColor3 = C_OK
 			else
-				tab.status.Text       = err
+				tab.status.Text       = err or "Teleport failed."
 				tab.status.TextColor3 = C_ERR
 			end
 		end)
@@ -2195,7 +2258,6 @@ local function createManager(tab)
 			end
 		end
 
-		-- Sorting logic
 		table.sort(entries, function(a, b)
 			if tab.name == "Cases" then
 				local numA = tonumber(a.Name:match("%d+")) or 0
@@ -2249,20 +2311,20 @@ local function createManager(tab)
 			local function renderGroup(groupName, list)
 				if #list == 0 then return end
 				shown += 1
-				local header = Instance.new("TextLabel")
-				header.Size = UDim2.new(1, 0, 0, 28)
-				header.BackgroundTransparency = 1
-				header.Text = groupName
-				header.Font = Enum.Font.GothamBold
-				header.TextSize = 12
-				header.TextColor3 = C_ACCENT
-				header.TextXAlignment = Enum.TextXAlignment.Left
-				header.LayoutOrder = shown
-				header.Parent = tab.scroll
+				local hd = Instance.new("TextLabel")
+				hd.Size = UDim2.new(1, 0, 0, 28)
+				hd.BackgroundTransparency = 1
+				hd.Text = groupName
+				hd.Font = Enum.Font.GothamBold
+				hd.TextSize = 12
+				hd.TextColor3 = C_ACCENT
+				hd.TextXAlignment = Enum.TextXAlignment.Left
+				hd.LayoutOrder = shown
+				hd.Parent = tab.scroll
 
 				local pad = Instance.new("UIPadding")
 				pad.PaddingLeft = UDim.new(0, 8)
-				pad.Parent = header
+				pad.Parent = hd
 
 				table.sort(list, function(a, b)
 					return (a:GetAttribute("Order") or 0) < (b:GetAttribute("Order") or 0)
@@ -2610,8 +2672,8 @@ end)
 -- go
 --=====================================================================
 showTab(tabs[1])
-for _, tab in ipairs(tabs) do 
+for _, tab in ipairs(tabs) do
 	if not tab.isAutoCollect and not tab.isMisc then
-		tab.rebuild() 
+		tab.rebuild()
 	end
 end
