@@ -1,20 +1,21 @@
 --!nocheck
 --=====================================================================
--- Stand Out Dashboard v47 (Madium + Xeno compatible)
---   * Noclip rewritten with a reliable Stepped loop (works on both)
---   * Fly improved (camera-locked, smooth, respawn-safe)
---   * Auto Collect FIXED (simulateKey + getCollectAction were MISSING)
---   * Tween movement rewritten (no more stuck-anchor bug)
---   * Teleport robust for supplies/barges (GetPivot fallback)
---   * Added: Gardening, Mechanic, YoYo-Ma Fight teleports
+-- Stand Out Dashboard v50 
+--   * Scrap Barge double-TP fixed; only re-teleports on retry #3, #4, #5
+--   * Keybind selector now displays "Click to bind"
+--   * Tab content shifted/centered + slider track inset (no separator overlap)
+--   * Tween line reworked into a thin, glowing fishing line; default speed = 200
+--   * GUI spawns centered near the upper-middle of the screen (avoids chat)
+--   * Sonar ping + Highlight visual overhaul (diamond reticle + dual wave + pulse)
+--   * World Events: "Pile of Money" holds H for 15s; other drops collect at lightspeed
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local TweenService     = game:GetService("TweenService")
+local Players             = game:GetService("Players")
+local RunService          = game:GetService("RunService")
+local UserInputService    = game:GetService("UserInputService")
+local TweenService        = game:GetService("TweenService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
@@ -33,15 +34,16 @@ local C_PANEL       = Color3.fromRGB(32, 35, 41)
 local C_ROW         = Color3.fromRGB(42, 46, 54)
 local C_ROW_HOT     = Color3.fromRGB(56, 61, 72)
 local C_ACCENT      = Color3.fromRGB(100, 0, 255)
-local C_ACCENT_SOFT = Color3.fromRGB(82, 0, 208)
+local C_ACCENT_DIM  = Color3.fromRGB(68, 32, 135)
 local C_TEXT        = Color3.fromRGB(236, 239, 244)
 local C_SUB         = Color3.fromRGB(145, 153, 168)
 local C_OK          = Color3.fromRGB(72, 214, 128)
 local C_WARN        = Color3.fromRGB(255, 186, 92)
 local C_ERR         = Color3.fromRGB(255, 120, 110)
 
-local HL_FILL    = Color3.fromRGB(255, 0, 200)
-local HL_OUTLINE = Color3.fromRGB(255, 255, 255)
+local HL_FILL        = Color3.fromRGB(170, 60, 255)
+local HL_OUTLINE     = Color3.fromRGB(230, 195, 255)
+local TWEEN_HL_COLOR = Color3.fromRGB(255, 235, 90)
 
 local activeTab
 local updateCountLabel
@@ -68,6 +70,7 @@ local STATIC_TELEPORTS = {
 	{Label = "Rohan's Mansion", Pos = Vector3.new(1599, 35, 1605), Group = "Miscellaneous", Order = 2},
 	{Label = "Gardening", Pos = Vector3.new(-1776, 31, 837), Group = "Miscellaneous", Order = 3},
 	{Label = "Mechanic", Pos = Vector3.new(-542, 20, 1283), Group = "Miscellaneous", Order = 4},
+	{Label = "Beach", Pos = Vector3.new(-461, 41, 2504), Group = "Miscellaneous", Order = 5},
 	{Label = "Underworld (Raids)", Pos = Vector3.new(-514, 19, 1995), Group = "Raids", Order = 1},
 	{Label = "Construction Site", Pos = Vector3.new(-30, 19, 925), Group = "Raids", Order = 2},
 	{Label = "Museum of Oahu", Pos = Vector3.new(-850, 19, 1811), Group = "Raids", Order = 3},
@@ -76,7 +79,9 @@ local STATIC_TELEPORTS = {
 	{Label = "YoYo-Ma Fight", Pos = Vector3.new(-305, 20, 1488), Group = "Raids", Order = 6},
 }
 
-local caseBeaconFolder = Instance.new("Folder")
+local caseBeaconFolder = workspace:FindFirstChild("SIM_CaseBeacons")
+if caseBeaconFolder then caseBeaconFolder:Destroy() end
+caseBeaconFolder = Instance.new("Folder")
 caseBeaconFolder.Name = "SIM_CaseBeacons"
 caseBeaconFolder.Parent = workspace
 
@@ -91,7 +96,9 @@ for i, pos in ipairs(STATIC_CASES) do
 	beacon.Parent = caseBeaconFolder
 end
 
-local teleportBeaconFolder = Instance.new("Folder")
+local teleportBeaconFolder = workspace:FindFirstChild("SIM_TeleportBeacons")
+if teleportBeaconFolder then teleportBeaconFolder:Destroy() end
+teleportBeaconFolder = Instance.new("Folder")
 teleportBeaconFolder.Name = "SIM_TeleportBeacons"
 teleportBeaconFolder.Parent = workspace
 
@@ -111,7 +118,9 @@ end
 --=====================================================================
 -- Scrap Barges Radar
 --=====================================================================
-local scrapBeaconFolder = Instance.new("Folder")
+local scrapBeaconFolder = workspace:FindFirstChild("SIM_ScrapBeacons")
+if scrapBeaconFolder then scrapBeaconFolder:Destroy() end
+scrapBeaconFolder = Instance.new("Folder")
 scrapBeaconFolder.Name = "SIM_ScrapBeacons"
 scrapBeaconFolder.Parent = workspace
 
@@ -306,12 +315,15 @@ local function corner(parent, r)
 end
 
 local function getDisplayName(item, tabName)
-	if tabName == "Cases" or tabName == "Teleports" or tabName == "Scrap Barges" or tabName == "World Events" then
+	if tabName == "Cases" or tabName == "Teleports" or tabName == "Scrap Barges" then
 		return item.Name
 	end
 
 	if item.Name == "Handle" or item.Name == "SeedCorner" then
 		return "Buried Supplies"
+	end
+	if item.Name == "DebrisPiece" then
+		return "Scrap Barge"
 	end
 	if tabName == "Supplies" then
 		return "Buried Supplies"
@@ -472,75 +484,153 @@ local function notifySpawn(item, tabName)
 end
 
 --=====================================================================
--- highlight + pulsing marker
+-- Highlight + Sonar Ping Overhaul (Diamond Reticle + Dual Wave + Pulse)
 --=====================================================================
 local highlights = {}
 local activeMarkers = {}
 
-local function buildMarker(part)
+local function buildMarker(part, hl)
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name           = "SIM_Marker"
-	billboard.Size           = UDim2.fromOffset(220, 220)
+	billboard.Size           = UDim2.fromOffset(180, 180)
 	billboard.AlwaysOnTop    = true
 	billboard.MaxDistance    = 20000
 	billboard.LightInfluence = 0
 	billboard.Adornee        = part
 	billboard.Parent         = part
 
-	local dot = Instance.new("Frame")
-	dot.Size             = UDim2.fromOffset(26, 26)
-	dot.Position         = UDim2.fromOffset(97, 97)
-	dot.BackgroundColor3 = HL_FILL
-	dot.BorderSizePixel  = 0
-	dot.Parent           = billboard
-	corner(dot, 13)
-	local dotStroke = Instance.new("UIStroke")
-	dotStroke.Color = HL_OUTLINE; dotStroke.Thickness = 3
-	dotStroke.Parent = dot
+	-- Outer rotating diamond reticle
+	local diamond = Instance.new("Frame")
+	diamond.AnchorPoint          = Vector2.new(0.5, 0.5)
+	diamond.Position             = UDim2.fromScale(0.5, 0.5)
+	diamond.Size                 = UDim2.fromOffset(22, 22)
+	diamond.Rotation             = 45
+	diamond.BackgroundColor3     = HL_FILL
+	diamond.BackgroundTransparency = 0.55
+	diamond.BorderSizePixel      = 0
+	diamond.Parent               = billboard
+	corner(diamond, 4)
 
-	local ring = Instance.new("Frame")
-	ring.Size                   = UDim2.fromOffset(26, 26)
-	ring.Position               = UDim2.fromOffset(97, 97)
-	ring.BackgroundTransparency = 1
-	ring.BorderSizePixel        = 0
-	ring.BackgroundColor3       = HL_FILL
-	ring.Parent                 = billboard
-	corner(ring, 13)
-	local ringStroke = Instance.new("UIStroke")
-	ringStroke.Color = HL_OUTLINE; ringStroke.Thickness = 3
-	ringStroke.Transparency = 0
-	ringStroke.Parent = ring
+	local diamondStroke = Instance.new("UIStroke")
+	diamondStroke.Color       = HL_OUTLINE
+	diamondStroke.Thickness   = 2
+	diamondStroke.Transparency = 0.1
+	diamondStroke.Parent      = diamond
 
-	local tInfo = TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-	local tweenRing = TweenService:Create(ring, tInfo, {Size = UDim2.fromOffset(210, 210), Position = UDim2.fromOffset(5, 5)})
-	local tweenStroke = TweenService:Create(ringStroke, tInfo, {Transparency = 1})
+	-- Bright inner core dot
+	local core = Instance.new("Frame")
+	core.AnchorPoint      = Vector2.new(0.5, 0.5)
+	core.Position         = UDim2.fromScale(0.5, 0.5)
+	core.Size             = UDim2.fromOffset(8, 8)
+	core.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	core.BorderSizePixel  = 0
+	core.Parent           = billboard
+	corner(core, 4)
+
+	-- Primary sonar wave (circular)
+	local ring1 = Instance.new("Frame")
+	ring1.AnchorPoint            = Vector2.new(0.5, 0.5)
+	ring1.Position               = UDim2.fromScale(0.5, 0.5)
+	ring1.Size                   = UDim2.fromOffset(22, 22)
+	ring1.BackgroundTransparency = 1
+	ring1.BorderSizePixel        = 0
+	ring1.Parent                 = billboard
+	corner(ring1, 999)
+
+	local stroke1 = Instance.new("UIStroke")
+	stroke1.Color        = HL_FILL
+	stroke1.Thickness    = 2.5
+	stroke1.Transparency = 0
+	stroke1.Parent       = ring1
+
+	-- Secondary staggered sonar wave (diamond echo)
+	local ring2 = Instance.new("Frame")
+	ring2.AnchorPoint            = Vector2.new(0.5, 0.5)
+	ring2.Position               = UDim2.fromScale(0.5, 0.5)
+	ring2.Size                   = UDim2.fromOffset(22, 22)
+	ring2.Rotation               = 45
+	ring2.BackgroundTransparency = 1
+	ring2.BorderSizePixel        = 0
+	ring2.Parent                 = billboard
+	corner(ring2, 8)
+
+	local stroke2 = Instance.new("UIStroke")
+	stroke2.Color        = HL_OUTLINE
+	stroke2.Thickness    = 1.8
+	stroke2.Transparency = 0.15
+	stroke2.Parent       = ring2
+
+	local tInfo1 = TweenInfo.new(1.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+	local tInfo2 = TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
 
 	table.insert(activeMarkers, {
-		gui = billboard,
-		ring = ring,
-		stroke = ringStroke,
-		tweenRing = tweenRing,
-		tweenStroke = tweenStroke,
+		gui         = billboard,
+		hl          = hl,
+		diamond     = diamond,
+		core        = core,
+		ring1       = ring1,
+		stroke1     = stroke1,
+		ring2       = ring2,
+		stroke2     = stroke2,
+		tweenRing1  = TweenService:Create(ring1, tInfo1, {Size = UDim2.fromOffset(165, 165)}),
+		tweenStr1   = TweenService:Create(stroke1, tInfo1, {Transparency = 1, Thickness = 0.5}),
+		tweenRing2  = TweenService:Create(ring2, tInfo2, {Size = UDim2.fromOffset(125, 125), Rotation = 135}),
+		tweenStr2   = TweenService:Create(stroke2, tInfo2, {Transparency = 1}),
 	})
 
 	return billboard
 end
 
 task.spawn(function()
+	local cycle = 0
 	while true do
-		task.wait(1.6)
+		cycle += 1
 		for i = #activeMarkers, 1, -1 do
 			local m = activeMarkers[i]
-			if not m.gui.Parent then
+			if not m.gui or not m.gui.Parent then
 				table.remove(activeMarkers, i)
 			else
-				m.ring.Size = UDim2.fromOffset(26, 26)
-				m.ring.Position = UDim2.fromOffset(97, 97)
-				m.stroke.Transparency = 0
-				m.tweenRing:Play()
-				m.tweenStroke:Play()
+				-- Primary wave launch
+				m.ring1.Size = UDim2.fromOffset(22, 22)
+				m.stroke1.Transparency = 0.05
+				m.stroke1.Thickness = 2.5
+				m.tweenRing1:Play()
+				m.tweenStr1:Play()
+
+				-- Reticle & 3D Highlight breathing pulse
+				local targetRot = (cycle % 2 == 0) and 45 or 135
+				TweenService:Create(m.diamond, TweenInfo.new(0.8, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+					Rotation = targetRot,
+					Size = UDim2.fromOffset(26, 26),
+				}):Play()
+				if m.hl and m.hl.Parent then
+					TweenService:Create(m.hl, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+						FillTransparency = 0.15,
+						OutlineTransparency = 0,
+					}):Play()
+				end
+
+				-- Staggered secondary diamond echo + settle back
+				task.delay(0.35, function()
+					if not m.gui or not m.gui.Parent then return end
+					m.ring2.Size = UDim2.fromOffset(22, 22)
+					m.ring2.Rotation = 45
+					m.stroke2.Transparency = 0.15
+					m.tweenRing2:Play()
+					m.tweenStr2:Play()
+					TweenService:Create(m.diamond, TweenInfo.new(0.65, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+						Size = UDim2.fromOffset(20, 20),
+					}):Play()
+					if m.hl and m.hl.Parent then
+						TweenService:Create(m.hl, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+							FillTransparency = 0.42,
+							OutlineTransparency = 0.2,
+						}):Play()
+					end
+				end)
 			end
 		end
+		task.wait(1.55)
 	end
 end)
 
@@ -552,14 +642,14 @@ local function applyHighlight(item, part)
 	local hl = Instance.new("Highlight")
 	hl.Name                = "SIM_Highlight"
 	hl.FillColor           = HL_FILL
-	hl.FillTransparency    = 0.15
+	hl.FillTransparency    = 0.25
 	hl.OutlineColor        = HL_OUTLINE
 	hl.OutlineTransparency = 0
 	hl.DepthMode           = Enum.HighlightDepthMode.AlwaysOnTop
 	hl.Adornee             = adorn
 	hl.Parent              = adorn
 
-	highlights[item] = { highlight = hl, marker = buildMarker(part) }
+	highlights[item] = { highlight = hl, marker = buildMarker(part, hl) }
 end
 
 local function clearHighlight(item)
@@ -595,6 +685,8 @@ local function teleportToPosition(targetPos)
 	if not hrp then return false, "Character not available." end
 	if not savedPosition then savedPosition = hrp.CFrame end
 	hrp.Anchored = false
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
 	hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
 	Camera.CameraType = Enum.CameraType.Custom
 	return true
@@ -612,13 +704,15 @@ local function returnToSaved()
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 	if not char or not hrp then return false, "Character not available." end
 	hrp.Anchored = false
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
 	hrp.CFrame = savedPosition
 	savedPosition = nil
 	return true
 end
 
 --=====================================================================
--- Misc Systems
+-- Misc Systems (ESP with Auto-Heal + Bold Distance)
 --=====================================================================
 local espEnabled = false
 local showEspDistance = false
@@ -634,14 +728,15 @@ end
 
 local function createESPForPlayer(p)
 	if not espEnabled or p == LocalPlayer then return end
-	removeESPForPlayer(p)
-
 	local char = p.Character
 	if not char then return end
-	local head = char:WaitForChild("Head", 5)
-	if not head then return end
+	local head = char:FindFirstChild("Head") or char:WaitForChild("Head", 3)
+	if not head or not espEnabled or p.Character ~= char then return end
+
+	removeESPForPlayer(p)
 
 	local hl = Instance.new("Highlight")
+	hl.Name = "SIM_ESPHighlight"
 	hl.FillTransparency = 1
 	hl.OutlineColor = Color3.fromRGB(255, 0, 0)
 	hl.OutlineTransparency = 0
@@ -677,16 +772,16 @@ local function createESPForPlayer(p)
 	txtDist.TextColor3 = Color3.fromRGB(255, 0, 0)
 	txtDist.TextStrokeTransparency = 0
 	txtDist.TextStrokeColor3 = Color3.new(0,0,0)
-	txtDist.Font = Enum.Font.Gotham
+	txtDist.Font = Enum.Font.GothamBold
 	txtDist.TextSize = 14
 	txtDist.Parent = bb
 
-	espData[p] = { highlight = hl, billboard = bb, txtDist = txtDist }
+	espData[p] = { highlight = hl, billboard = bb, txtDist = txtDist, char = char }
 end
 
 local function updateESP()
 	if not espEnabled then
-		for p, data in pairs(espData) do
+		for p in pairs(espData) do
 			removeESPForPlayer(p)
 		end
 		return
@@ -694,86 +789,120 @@ local function updateESP()
 
 	for _, p in ipairs(Players:GetPlayers()) do
 		if p ~= LocalPlayer then
-			if not espData[p] then
-				task.spawn(createESPForPlayer, p)
-			end
+			task.spawn(createESPForPlayer, p)
 		end
 	end
 end
 
-for _, p in ipairs(Players:GetPlayers()) do
-	if p ~= LocalPlayer then
-		p.CharacterAdded:Connect(function()
-			if espEnabled then
-				task.wait(0.5)
-				if espEnabled then createESPForPlayer(p) end
-			end
-		end)
-		p.CharacterRemoving:Connect(function()
-			removeESPForPlayer(p)
-		end)
-	end
-end
-
-Players.PlayerAdded:Connect(function(p)
+local function hookPlayerESP(p)
+	if p == LocalPlayer then return end
 	p.CharacterAdded:Connect(function()
+		removeESPForPlayer(p)
 		if espEnabled then
-			task.wait(0.5)
+			task.wait(0.4)
 			if espEnabled then createESPForPlayer(p) end
 		end
 	end)
 	p.CharacterRemoving:Connect(function()
 		removeESPForPlayer(p)
 	end)
-end)
+end
 
-Players.PlayerRemoving:Connect(function(p)
-	removeESPForPlayer(p)
+for _, p in ipairs(Players:GetPlayers()) do
+	hookPlayerESP(p)
+end
+Players.PlayerAdded:Connect(function(p)
+	hookPlayerESP(p)
+	if espEnabled then
+		task.spawn(createESPForPlayer, p)
+	end
 end)
+Players.PlayerRemoving:Connect(removeESPForPlayer)
 
 task.spawn(function()
 	while true do
 		task.wait(0.5)
-		if espEnabled and showEspDistance then
+		if espEnabled then
 			local lhrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-			for p, data in pairs(espData) do
-				if p.Character and p.Character:FindFirstChild("HumanoidRootPart") and lhrp then
-					local dist = math.floor((lhrp.Position - p.Character.HumanoidRootPart.Position).Magnitude)
-					data.txtDist.Text = "[" .. dist .. " studs]"
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p ~= LocalPlayer then
+					local char = p.Character
+					local head = char and char:FindFirstChild("Head")
+					local data = espData[p]
+
+					if char and head then
+						if not data or data.char ~= char or not data.highlight or not data.highlight.Parent or not data.billboard or not data.billboard.Parent then
+							task.spawn(createESPForPlayer, p)
+							data = espData[p]
+						end
+					elseif data then
+						removeESPForPlayer(p)
+						data = nil
+					end
+
+					if data and data.txtDist then
+						if showEspDistance and char and char:FindFirstChild("HumanoidRootPart") and lhrp then
+							local dist = math.floor((lhrp.Position - char.HumanoidRootPart.Position).Magnitude)
+							data.txtDist.Text = "[" .. dist .. " studs]"
+						else
+							data.txtDist.Text = ""
+						end
+					end
 				end
-			end
-		elseif not showEspDistance then
-			for p, data in pairs(espData) do
-				data.txtDist.Text = ""
 			end
 		end
 	end
 end)
 
 --=====================================================================
--- Fly (improved)
+-- Fly (Zero-Gravity Hover Fix)
 --=====================================================================
 local flyEnabled = false
 local flySpeed = 50
+local flyBodyVel = nil
+
+local function cleanupFlyForce()
+	if flyBodyVel then
+		flyBodyVel:Destroy()
+		flyBodyVel = nil
+	end
+end
+
+local function ensureFlyForce(hrp)
+	if not flyBodyVel or flyBodyVel.Parent ~= hrp then
+		cleanupFlyForce()
+		local bv = Instance.new("BodyVelocity")
+		bv.Name = "SIM_FlyHover"
+		bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+		bv.Velocity = Vector3.zero
+		bv.Parent = hrp
+		flyBodyVel = bv
+	end
+	flyBodyVel.Velocity = Vector3.zero
+end
 
 local function toggleFly(state)
 	flyEnabled = state
 	local char = LocalPlayer.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if not state and hum then
-		hum.PlatformStand = false
-	end
-	if state then
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not state then
+		cleanupFlyForce()
+		if hum then hum.PlatformStand = false end
+	else
+		if hrp then ensureFlyForce(hrp) end
 		Camera.CameraType = Enum.CameraType.Custom
 	end
 end
 
-LocalPlayer.CharacterAdded:Connect(function()
+LocalPlayer.CharacterAdded:Connect(function(char)
+	cleanupFlyForce()
 	if flyEnabled then
 		task.wait(0.3)
-		local char = LocalPlayer.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local hrp = char:FindFirstChild("HumanoidRootPart")
 		if hum then hum.PlatformStand = true end
+		if hrp and flyEnabled then ensureFlyForce(hrp) end
 	end
 end)
 
@@ -785,6 +914,7 @@ RunService.RenderStepped:Connect(function(dt)
 	if not hrp or not hum then return end
 
 	hum.PlatformStand = true
+	ensureFlyForce(hrp)
 	Camera.CameraType = Enum.CameraType.Custom
 
 	local cam = workspace.CurrentCamera
@@ -797,37 +927,58 @@ RunService.RenderStepped:Connect(function(dt)
 	if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
 
 	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
 	if moveDir.Magnitude > 0 then
 		hrp.CFrame = hrp.CFrame + (moveDir.Unit * flySpeed * dt)
 	end
 end)
 
 --=====================================================================
--- Noclip (reliable Stepped loop — works on Xeno + Madium)
+-- Noclip (Fixed for multi-wall collisions without breaking pickups)
 --=====================================================================
 local noclipEnabled = false
+local origCollide = {}
 
-local function setCharCollide(char, collide)
+local function setCharCollide(char, disableCollide)
 	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, not disableCollide)
+		hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, not disableCollide)
+		hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, not disableCollide)
+	end
+
 	for _, p in ipairs(char:GetDescendants()) do
 		if p:IsA("BasePart") then
-			p.CanCollide = collide
-			p.CanQuery   = collide
-			p.CanTouch   = collide
+			if disableCollide then
+				if origCollide[p] == nil then
+					origCollide[p] = p.CanCollide
+				end
+				p.CanCollide = false
+			else
+				if origCollide[p] ~= nil then
+					p.CanCollide = origCollide[p]
+				else
+					p.CanCollide = true
+				end
+			end
 		end
+	end
+	if not disableCollide then
+		table.clear(origCollide)
 	end
 end
 
 local function toggleNoclip(state)
 	noclipEnabled = state
 	if not state then
-		setCharCollide(LocalPlayer.Character, true)
+		setCharCollide(LocalPlayer.Character, false)
 	end
 end
 
 RunService.Stepped:Connect(function()
 	if not noclipEnabled then return end
-	setCharCollide(LocalPlayer.Character, false)
+	setCharCollide(LocalPlayer.Character, true)
 end)
 
 -- Walkspeed Logic
@@ -859,7 +1010,7 @@ RunService.Stepped:Connect(function()
 end)
 
 --=====================================================================
--- GUI shell
+-- GUI shell (Spawns centered horizontally, closer to top of screen)
 --=====================================================================
 local gui = Instance.new("ScreenGui")
 gui.Name         = "SpawnedItemsMonitor"
@@ -882,7 +1033,7 @@ corner(toggleBtn, 17)
 
 local main = Instance.new("Frame")
 main.Name             = "Main"
-main.Position         = UDim2.fromOffset(16, 90)
+main.Position         = UDim2.new(0.5, -240, 0.12, 0) -- Centered, upper-middle (clear of chat)
 main.Size             = UDim2.fromOffset(480, 460)
 main.BackgroundColor3 = C_BG
 main.BorderSizePixel  = 0
@@ -900,10 +1051,7 @@ header.ZIndex           = 10
 header.Parent           = main
 
 local headerCorner = Instance.new("UICorner")
-headerCorner.TopLeftRadius = UDim.new(0, 10)
-headerCorner.TopRightRadius = UDim.new(0, 10)
-headerCorner.BottomLeftRadius = UDim.new(0, 0)
-headerCorner.BottomRightRadius = UDim.new(0, 0)
+headerCorner.CornerRadius = UDim.new(0, 10)
 headerCorner.Parent = header
 
 local title = Instance.new("TextLabel")
@@ -1005,14 +1153,17 @@ returnBtn.TextSize         = 12
 returnBtn.TextColor3       = C_TEXT
 returnBtn.BackgroundColor3 = C_PANEL
 returnBtn.BorderSizePixel  = 0
-returnBtn.Position         = UDim2.fromOffset(150, 7)
-returnBtn.Size             = UDim2.new(1, -160, 0, 30)
+returnBtn.Position         = UDim2.fromOffset(156, 7)
+returnBtn.Size             = UDim2.new(1, -172, 0, 30)
 returnBtn.Parent           = footer
 corner(returnBtn, 6)
 
 --=====================================================================
--- Dropdown & Slider Helpers
+-- Dropdown, Slider & Keybind Toggle Helpers (Centered & Inset)
 --=====================================================================
+local PAGE_PAD_X = 16
+local PAGE_WIDTH_OFFSET = -(PAGE_PAD_X * 2)
+
 local function closeAllDropdowns(parent)
 	for _, child in ipairs(parent:GetDescendants()) do
 		if child:IsA("Frame") and child.Name == "DropdownOptions" then
@@ -1021,10 +1172,10 @@ local function closeAllDropdowns(parent)
 	end
 end
 
-local function buildDropdown(parent, label, options, defaultIndex, position, onChange)
+local function buildDropdown(parent, label, options, defaultIndex, yOffset, onChange)
 	local container = Instance.new("Frame")
-	container.Size = UDim2.new(1, -20, 0, 50)
-	container.Position = position
+	container.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 50)
+	container.Position = UDim2.fromOffset(PAGE_PAD_X, yOffset)
 	container.BackgroundTransparency = 1
 	container.Parent = parent
 
@@ -1115,10 +1266,10 @@ local function buildDropdown(parent, label, options, defaultIndex, position, onC
 	end
 end
 
-local function buildMultiDropdown(parent, label, options, position, onChange)
+local function buildMultiDropdown(parent, label, options, yOffset, onChange)
 	local container = Instance.new("Frame")
-	container.Size = UDim2.new(1, -20, 0, 50)
-	container.Position = position
+	container.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 50)
+	container.Position = UDim2.fromOffset(PAGE_PAD_X, yOffset)
 	container.BackgroundTransparency = 1
 	container.Parent = parent
 
@@ -1199,7 +1350,7 @@ local function buildMultiDropdown(parent, label, options, position, onChange)
 		optionsFrame.Visible = not wasOpen
 	end)
 
-	for i, opt in ipairs(options) do
+	for _, opt in ipairs(options) do
 		local optBtn = Instance.new("TextButton")
 		optBtn.Text = ""
 		optBtn.BackgroundColor3 = C_PANEL
@@ -1219,10 +1370,10 @@ local function buildMultiDropdown(parent, label, options, position, onChange)
 		corner(checkBg, 3)
 
 		local checkMark = Instance.new("TextLabel")
-		checkMark.Text = "✔"
+		checkMark.Text = "✓"
 		checkMark.Font = Enum.Font.GothamBold
-		checkMark.TextSize = 12
-		checkMark.TextColor3 = C_TEXT
+		checkMark.TextSize = 13
+		checkMark.TextColor3 = Color3.fromRGB(255, 255, 255)
 		checkMark.BackgroundTransparency = 1
 		checkMark.Size = UDim2.new(1, 0, 1, 0)
 		checkMark.Visible = false
@@ -1251,7 +1402,7 @@ local function buildMultiDropdown(parent, label, options, position, onChange)
 				checkMark.Visible = false
 			else
 				selected[opt] = true
-				checkBg.BackgroundColor3 = C_ACCENT_SOFT
+				checkBg.BackgroundColor3 = C_ACCENT_DIM
 				checkMark.Visible = true
 			end
 			updateButtonText()
@@ -1259,10 +1410,10 @@ local function buildMultiDropdown(parent, label, options, position, onChange)
 	end
 end
 
-local function buildSlider(parent, label, minVal, maxVal, defaultVal, position, isInt, onChange)
+local function buildSlider(parent, label, minVal, maxVal, defaultVal, yOffset, isInt, onChange)
 	local container = Instance.new("Frame")
-	container.Size = UDim2.new(1, -20, 0, 50)
-	container.Position = position
+	container.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 50)
+	container.Position = UDim2.fromOffset(PAGE_PAD_X, yOffset)
 	container.BackgroundTransparency = 1
 	container.Parent = parent
 
@@ -1276,9 +1427,10 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, position, 
 	labelLbl.TextXAlignment = Enum.TextXAlignment.Left
 	labelLbl.Parent = container
 
+	-- Inset slider track by 8px on left so the 16px thumb at 0% never overhangs the left edge
 	local sliderFrame = Instance.new("Frame")
-	sliderFrame.Size = UDim2.new(1, -68, 0, 20)
-	sliderFrame.Position = UDim2.new(0, 0, 0, 18)
+	sliderFrame.Size = UDim2.new(1, -74, 0, 20)
+	sliderFrame.Position = UDim2.new(0, 8, 0, 18)
 	sliderFrame.BackgroundTransparency = 1
 	sliderFrame.Parent = container
 
@@ -1306,8 +1458,8 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, position, 
 	corner(thumb, 8)
 
 	local textBox = Instance.new("TextBox")
-	textBox.Size = UDim2.fromOffset(50, 24)
-	textBox.Position = UDim2.new(1, -58, 0.5, -12)
+	textBox.Size = UDim2.fromOffset(52, 24)
+	textBox.Position = UDim2.new(1, -52, 0, 16)
 	textBox.BackgroundColor3 = C_PANEL
 	textBox.TextColor3 = C_TEXT
 	textBox.Font = Enum.Font.Gotham
@@ -1361,10 +1513,43 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, position, 
 	setValue(defaultVal)
 end
 
-local function buildToggle(parent, label, position, defaultState, onChange)
+-- Keybind Manager for Misc Toggles
+local registeredKeybinds = {}
+local listeningToggle = nil
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+	local kc = input.KeyCode
+	if kc == Enum.KeyCode.Unknown then return end
+
+	if listeningToggle then
+		local target = listeningToggle
+		listeningToggle = nil
+		if kc == Enum.KeyCode.Backspace or kc == Enum.KeyCode.Delete or kc == Enum.KeyCode.Escape then
+			target.key = nil
+			target.btn.Text = "Click to bind"
+			target.btn.TextColor3 = C_SUB
+		else
+			target.key = kc
+			target.btn.Text = "[" .. kc.Name .. "]"
+			target.btn.TextColor3 = C_TEXT
+		end
+		return
+	end
+
+	if gameProcessed or UserInputService:GetFocusedTextBox() then return end
+
+	for _, entry in ipairs(registeredKeybinds) do
+		if entry.key and entry.key == kc then
+			entry.toggle()
+		end
+	end
+end)
+
+local function buildToggle(parent, label, yOffset, defaultState, onChange, allowKeybind)
 	local container = Instance.new("Frame")
-	container.Size = UDim2.new(1, -20, 0, 30)
-	container.Position = position
+	container.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 30)
+	container.Position = UDim2.fromOffset(PAGE_PAD_X, yOffset)
 	container.BackgroundTransparency = 1
 	container.Parent = parent
 
@@ -1374,13 +1559,13 @@ local function buildToggle(parent, label, position, defaultState, onChange)
 	labelLbl.TextSize = 11
 	labelLbl.TextColor3 = C_SUB
 	labelLbl.BackgroundTransparency = 1
-	labelLbl.Size = UDim2.new(1, -60, 1, 0)
+	labelLbl.Size = UDim2.new(1, allowKeybind and -138 or -50, 1, 0)
 	labelLbl.TextXAlignment = Enum.TextXAlignment.Left
 	labelLbl.Parent = container
 
 	local switchBg = Instance.new("Frame")
 	switchBg.Size = UDim2.fromOffset(40, 20)
-	switchBg.Position = UDim2.new(1, -48, 0.5, -10)
+	switchBg.Position = allowKeybind and UDim2.new(1, -124, 0.5, -10) or UDim2.new(1, -40, 0.5, -10)
 	switchBg.BackgroundColor3 = defaultState and C_OK or C_ROW_HOT
 	switchBg.BorderSizePixel = 0
 	switchBg.Parent = container
@@ -1401,20 +1586,65 @@ local function buildToggle(parent, label, position, defaultState, onChange)
 	btn.Parent = switchBg
 
 	local state = defaultState
-	btn.MouseButton1Click:Connect(function()
-		state = not state
+	local function setState(newState)
+		state = newState
 		switchBg.BackgroundColor3 = state and C_OK or C_ROW_HOT
 		TweenService:Create(thumb, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
 		}):Play()
 		if onChange then onChange(state) end
+	end
+
+	btn.MouseButton1Click:Connect(function()
+		setState(not state)
 	end)
+
+	if allowKeybind then
+		local kbBtn = Instance.new("TextButton")
+		kbBtn.Size = UDim2.fromOffset(76, 22)
+		kbBtn.Position = UDim2.new(1, -76, 0.5, -11)
+		kbBtn.BackgroundColor3 = C_PANEL
+		kbBtn.BorderSizePixel = 0
+		kbBtn.Font = Enum.Font.GothamBold
+		kbBtn.TextSize = 10
+		kbBtn.TextColor3 = C_SUB
+		kbBtn.Text = "Click to bind"
+		kbBtn.TextTruncate = Enum.TextTruncate.AtEnd
+		kbBtn.Parent = container
+		corner(kbBtn, 5)
+
+		local entry = {
+			key = nil,
+			btn = kbBtn,
+			toggle = function()
+				setState(not state)
+			end,
+		}
+		table.insert(registeredKeybinds, entry)
+
+		kbBtn.MouseButton1Click:Connect(function()
+			if listeningToggle == entry then
+				listeningToggle = nil
+				kbBtn.Text = entry.key and ("[" .. entry.key.Name .. "]") or "Click to bind"
+				kbBtn.TextColor3 = entry.key and C_TEXT or C_SUB
+			else
+				if listeningToggle then
+					local prev = listeningToggle
+					prev.btn.Text = prev.key and ("[" .. prev.key.Name .. "]") or "Click to bind"
+					prev.btn.TextColor3 = prev.key and C_TEXT or C_SUB
+				end
+				listeningToggle = entry
+				kbBtn.Text = "Press key..."
+				kbBtn.TextColor3 = C_WARN
+			end
+		end)
+	end
 
 	if onChange then onChange(state) end
 end
 
 --=====================================================================
--- Auto Collect Logic  (FIXED)
+-- Auto Collect Logic (v50 - Thin Glowing Fishing Line + Fast World Events)
 --=====================================================================
 local autoCollectState = {
 	running      = false,
@@ -1424,49 +1654,208 @@ local autoCollectState = {
 	attempts     = {},
 	busy         = false,
 	statusTab    = nil,
-	tweenSpeed   = 250,
+	tweenSpeed   = 200, -- Default set to 200
 	delayTime    = 0,
 	cancelMove   = nil,
 }
 
--- KEY SIMULATION (was missing entirely!)
-local function simulateKey(key, holdTime)
-	holdTime = holdTime or 0.06
-	-- Prefer executor keypress/keyrelease (madium + xeno both support)
-	if keypress and keyrelease then
-		local ok = pcall(function()
-			keypress(key)
-			task.wait(holdTime)
-			keyrelease(key)
-		end)
-		if ok then return true end
+local VK_CODES = {
+	H = 0x48,
+	R = 0x52,
+	E = 0x45,
+}
+
+-- Tween Visuals (Glowing thin fishing line + yellow Highlight)
+local tweenVisuals = {
+	highlight  = nil,
+	targetNode = nil,
+	hrpAtt     = nil,
+	coreBeam   = nil,
+	glowBeam   = nil,
+}
+
+local function clearTweenVisuals()
+	if tweenVisuals.highlight then
+		tweenVisuals.highlight:Destroy()
+		tweenVisuals.highlight = nil
 	end
-	-- Fallback: VirtualInputManager (universal)
+	if tweenVisuals.coreBeam then
+		tweenVisuals.coreBeam:Destroy()
+		tweenVisuals.coreBeam = nil
+	end
+	if tweenVisuals.glowBeam then
+		tweenVisuals.glowBeam:Destroy()
+		tweenVisuals.glowBeam = nil
+	end
+	if tweenVisuals.hrpAtt then
+		tweenVisuals.hrpAtt:Destroy()
+		tweenVisuals.hrpAtt = nil
+	end
+	if tweenVisuals.targetNode then
+		tweenVisuals.targetNode:Destroy()
+		tweenVisuals.targetNode = nil
+	end
+end
+
+local function createTweenVisuals(hrp, item, targetPos)
+	clearTweenVisuals()
+	local part = getPart(item)
+	local adorn = getAdornee(item, part)
+
+	if adorn then
+		local hl = Instance.new("Highlight")
+		hl.Name = "SIM_TweenHighlight"
+		hl.FillColor = TWEEN_HL_COLOR
+		hl.FillTransparency = 0.25
+		hl.OutlineColor = Color3.fromRGB(255, 255, 190)
+		hl.OutlineTransparency = 0
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Adornee = adorn
+		hl.Parent = adorn
+		tweenVisuals.highlight = hl
+	end
+
+	local hrpAtt = Instance.new("Attachment")
+	hrpAtt.Name = "SIM_TweenAtt0"
+	hrpAtt.Parent = hrp
+	tweenVisuals.hrpAtt = hrpAtt
+
+	local targetNode = Instance.new("Part")
+	targetNode.Name = "SIM_TweenTargetNode"
+	targetNode.Size = Vector3.new(0.3, 0.3, 0.3)
+	targetNode.Position = targetPos
+	targetNode.Anchored = true
+	targetNode.CanCollide = false
+	targetNode.CanTouch = false
+	targetNode.CanQuery = false
+	targetNode.Transparency = 1
+	targetNode.Parent = workspace
+	tweenVisuals.targetNode = targetNode
+
+	local targetAtt = Instance.new("Attachment")
+	targetAtt.Name = "SIM_TweenAtt1"
+	targetAtt.Parent = targetNode
+
+	-- Inner thin bright white-yellow fishing line core
+	local coreBeam = Instance.new("Beam")
+	coreBeam.Name = "SIM_TweenCoreBeam"
+	coreBeam.Attachment0 = hrpAtt
+	coreBeam.Attachment1 = targetAtt
+	coreBeam.Color = ColorSequence.new(Color3.fromRGB(255, 255, 210), Color3.fromRGB(255, 240, 120))
+	coreBeam.Transparency = NumberSequence.new(0)
+	coreBeam.LightInfluence = 0
+	coreBeam.LightEmission = 1
+	coreBeam.Brightness = 4
+	coreBeam.FaceCamera = true
+	coreBeam.Segments = 30
+	coreBeam.CurveSize0 = 1.4
+	coreBeam.CurveSize1 = -1.4
+	coreBeam.Width0 = 0.08
+	coreBeam.Width1 = 0.08
+	coreBeam.Parent = targetNode
+	tweenVisuals.coreBeam = coreBeam
+
+	-- Outer soft golden neon aura
+	local glowBeam = Instance.new("Beam")
+	glowBeam.Name = "SIM_TweenGlowBeam"
+	glowBeam.Attachment0 = hrpAtt
+	glowBeam.Attachment1 = targetAtt
+	glowBeam.Color = ColorSequence.new(TWEEN_HL_COLOR)
+	glowBeam.Transparency = NumberSequence.new(0.45)
+	glowBeam.LightInfluence = 0
+	glowBeam.LightEmission = 1
+	glowBeam.Brightness = 3
+	glowBeam.FaceCamera = true
+	glowBeam.Segments = 30
+	glowBeam.CurveSize0 = 1.4
+	glowBeam.CurveSize1 = -1.4
+	glowBeam.Width0 = 0.24
+	glowBeam.Width1 = 0.24
+	glowBeam.Parent = targetNode
+	tweenVisuals.glowBeam = glowBeam
+end
+
+local function triggerPromptsOnItem(targetItem, holdTime)
+	if not targetItem then return end
+	for _, desc in ipairs(targetItem:GetDescendants()) do
+		if desc:IsA("ProximityPrompt") and desc.Enabled then
+			if typeof(fireproximityprompt) == "function" then
+				pcall(fireproximityprompt, desc)
+			end
+			pcall(function()
+				desc:InputHoldBegin()
+				task.wait(math.max(holdTime or 0.1, desc.HoldDuration + 0.05))
+				desc:InputHoldEnd()
+			end)
+		end
+	end
+end
+
+local function simulateKey(key, holdTime, targetItem)
+	holdTime = holdTime or 0.08
 	local kc = Enum.KeyCode[key]
-	if not kc then return false end
-	pcall(function()
-		VirtualInputManager:SendKeyEvent(true, kc, false, false)
-	end)
-	task.wait(holdTime)
-	pcall(function()
-		VirtualInputManager:SendKeyEvent(false, kc, false, false)
-	end)
+	local vk = VK_CODES[key] or (kc and kc.Value)
+
+	-- Smart wait: if holding for a long duration (e.g. 15s Pile of Money), release early as soon as item despawns
+	local function smartHoldWait(duration)
+		if duration <= 0.25 or not targetItem then
+			task.wait(duration)
+			return
+		end
+		local t0 = os.clock()
+		while (os.clock() - t0) < duration do
+			if not autoCollectState.running or not targetItem:IsDescendantOf(workspace) then
+				break
+			end
+			task.wait(0.15)
+		end
+	end
+
+	local vimOk = false
+	if kc and VirtualInputManager then
+		local ok = pcall(function()
+			VirtualInputManager:SendKeyEvent(true, kc, false, game)
+		end)
+		if ok then
+			smartHoldWait(holdTime)
+			pcall(function()
+				VirtualInputManager:SendKeyEvent(false, kc, false, game)
+			end)
+			vimOk = true
+		end
+	end
+
+	if not vimOk and keypress and keyrelease and vk then
+		pcall(function()
+			keypress(vk)
+			smartHoldWait(holdTime)
+			keyrelease(vk)
+		end)
+	end
 	return true
 end
 
--- COLLECT ACTION (was missing entirely!)
--- Arrows  : quick H tap
--- Supplies: hold H (repeat, since game sometimes needs multiple holds)
--- Scrap   : R heavy hit (no Stand needed per your notes)
+local function isPileOfMoney(item)
+	if not item then return false end
+	local rawName = string.lower(item.Name)
+	local dispName = string.lower(getDisplayName(item, "World Events"))
+	return (string.find(rawName, "pile of money", 1, true) ~= nil)
+		or (string.find(dispName, "pile of money", 1, true) ~= nil)
+end
+
 local function getCollectAction(item, catName)
 	if catName == "Buried Supplies" then
-		return {key = "H", holdTime = 0.8, multiHolds = 2, hint = "Holding H for supplies..."}
+		return {key = "H", holdTime = 1.3, multiHolds = 2, hint = "Holding H for supplies..."}
 	elseif catName == "Scrap Barges" then
-		return {key = "R", holdTime = 0.1, multiHolds = 1}
+		return {key = "R", holdTime = 0.12, multiHolds = 1}
 	elseif catName == "World Events" then
-		return {key = "H", holdTime = 0.08, multiHolds = 1}
+		if isPileOfMoney(item) then
+			return {key = "H", holdTime = 15.0, multiHolds = 1, isMoneyPile = true, hint = "Holding H (15s) for Pile of Money..."}
+		else
+			return {key = "H", holdTime = 0.05, multiHolds = 1, fastChain = true}
+		end
 	else
-		return {key = "H", holdTime = 0.08, multiHolds = 1}
+		return {key = "H", holdTime = 0.1, multiHolds = 1}
 	end
 end
 
@@ -1490,8 +1879,10 @@ local function getItemsForCategory(catName)
 			end
 		end
 	elseif catName == "Scrap Barges" then
-		for _, item in ipairs(scrapBeaconFolder:GetChildren()) do
-			table.insert(items, item)
+		for obj in pairs(scrapPieces) do
+			if obj and obj:IsDescendantOf(workspace) then
+				table.insert(items, obj)
+			end
 		end
 	elseif catName == "World Events" then
 		local g = workspace:FindFirstChild("Game")
@@ -1505,10 +1896,9 @@ local function getItemsForCategory(catName)
 	return items
 end
 
--- Simple loop-based tween (replaces old TweenService impl that left HRP anchored on cancel)
 local function moveToItem(item, onComplete)
-	local part = getPart(item)
-	if not part then
+	local targetPos = getItemPosition(item)
+	if not targetPos then
 		if onComplete then onComplete(false) end
 		return false
 	end
@@ -1519,10 +1909,12 @@ local function moveToItem(item, onComplete)
 		return false
 	end
 
-	local startCF = hrp.CFrame
-	local endCF   = CFrame.new(part.Position + Vector3.new(0, 3, 0))
-	local dist    = (startCF.Position - endCF.Position).Magnitude
+	local startCF  = hrp.CFrame
+	local endCF    = CFrame.new(targetPos + Vector3.new(0, 3, 0))
+	local dist     = (startCF.Position - endCF.Position).Magnitude
 	local duration = math.max(0.05, dist / math.max(1, autoCollectState.tweenSpeed))
+
+	createTweenVisuals(hrp, item, targetPos)
 
 	hrp.Anchored = true
 	local cancelled = false
@@ -1538,23 +1930,35 @@ local function moveToItem(item, onComplete)
 		if hrp and hrp.Parent then
 			hrp.CFrame = startCF:Lerp(endCF, alpha)
 		end
+		local updatedPos = getItemPosition(item)
+		if updatedPos and tweenVisuals.targetNode then
+			tweenVisuals.targetNode.Position = updatedPos
+		end
 		task.wait()
 	end
 
 	autoCollectState.cancelMove = nil
+	clearTweenVisuals()
+
 	if hrp and hrp.Parent then
 		if not cancelled and autoCollectState.running then
 			hrp.CFrame = endCF
 		end
 		hrp.Anchored = false
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
 	end
 	if onComplete then onComplete(not cancelled) end
 	return true
 end
 
+local lastLoopFast = false
+
 task.spawn(function()
 	while true do
-		task.wait(0.3)
+		task.wait(lastLoopFast and 0.03 or 0.25)
+		lastLoopFast = false
+
 		if not autoCollectState.running then continue end
 		if autoCollectState.busy then continue end
 
@@ -1602,11 +2006,23 @@ task.spawn(function()
 		local targetData = available[1]
 		local targetItem = targetData.item
 		local targetCat  = targetData.catName
-		local name       = getDisplayName(targetItem, "Items")
+		local name       = getDisplayName(targetItem, targetCat == "World Events" and "World Events" or "Items")
+		local action     = getCollectAction(targetItem, targetCat)
+		local isFastWorldEvent = (action and action.fastChain == true)
+
+		local att = autoCollectState.attempts[targetItem]
+		local retryNum = att and att.count or 0
+		local isRetry = (retryNum > 0)
 
 		if autoCollectState.statusTab and autoCollectState.statusTab.status then
-			autoCollectState.statusTab.status.Text = "Collecting: " .. name
-			autoCollectState.statusTab.status.TextColor3 = C_OK
+			if isRetry then
+				autoCollectState.statusTab.status.Text =
+					string.format("Retrying %s (%d/%d)", name, retryNum, COLLECT_MAX_TRIES)
+				autoCollectState.statusTab.status.TextColor3 = C_WARN
+			else
+				autoCollectState.statusTab.status.Text = "Collecting: " .. name
+				autoCollectState.statusTab.status.TextColor3 = C_OK
+			end
 		end
 
 		autoCollectState.busy = true
@@ -1614,16 +2030,23 @@ task.spawn(function()
 		local distToTarget = (targetData.pos - hrp.Position).Magnitude
 		local moved = false
 
-		if distToTarget > 15 then
+		-- Move once on initial visit (distToTarget > 12), and only re-teleport/tween on retries past retry #2 (retry 3, 4, 5)
+		local shouldMove = (distToTarget > 12) or (retryNum >= 3)
+
+		if shouldMove then
 			if autoCollectState.mode == "Teleport" then
 				local ok = teleportToItem(targetItem)
 				moved = ok == true
-				if moved then task.wait(TELEPORT_SETTLE) end
+				if moved then
+					task.wait(isFastWorldEvent and 0.05 or TELEPORT_SETTLE)
+				end
 			elseif autoCollectState.mode == "Tween" then
-				local done, ok = false, false
-				moveToItem(targetItem, function(s) done = true; ok = s end)
+				local ok = false
+				moveToItem(targetItem, function(s) ok = s end)
 				moved = ok
-				if moved then task.wait(TWEEN_SETTLE) end
+				if moved then
+					task.wait(isFastWorldEvent and 0.04 or TWEEN_SETTLE)
+				end
 			end
 		else
 			moved = true
@@ -1634,24 +2057,31 @@ task.spawn(function()
 			continue
 		end
 
-		if moved and targetItem:IsDescendantOf(workspace) then
-			local action = getCollectAction(targetItem, targetCat)
-			if action then
-				if autoCollectState.statusTab and autoCollectState.statusTab.status then
-					if action.hint then
-						autoCollectState.statusTab.status.Text = action.hint
-						autoCollectState.statusTab.status.TextColor3 = C_WARN
-					else
-						autoCollectState.statusTab.status.Text = "Pressing " .. action.key .. " for " .. name
-						autoCollectState.statusTab.status.TextColor3 = C_OK
-					end
+		if moved and targetItem:IsDescendantOf(workspace) and action then
+			if autoCollectState.statusTab and autoCollectState.statusTab.status then
+				if action.hint then
+					autoCollectState.statusTab.status.Text = action.hint
+					autoCollectState.statusTab.status.TextColor3 = C_WARN
+				else
+					autoCollectState.statusTab.status.Text = "Pressing " .. action.key .. " for " .. name
+					autoCollectState.statusTab.status.TextColor3 = C_OK
 				end
+			end
 
-				for i = 1, (action.multiHolds or 1) do
-					if not targetItem:IsDescendantOf(workspace) then break end
+			for _ = 1, (action.multiHolds or 1) do
+				if not targetItem:IsDescendantOf(workspace) then break end
+				if not autoCollectState.running then break end
+				task.spawn(triggerPromptsOnItem, targetItem, action.holdTime)
+				simulateKey(action.key, action.holdTime, targetItem)
+				task.wait(isFastWorldEvent and 0.04 or 0.25)
+			end
+
+			-- Wait for Scrap Barge break animation / server despawn before checking if it still exists
+			if targetCat == "Scrap Barges" then
+				local waitStart = os.clock()
+				while targetItem:IsDescendantOf(workspace) and (os.clock() - waitStart) < 1.1 do
 					if not autoCollectState.running then break end
-					simulateKey(action.key, action.holdTime)
-					task.wait(0.25)
+					task.wait(0.1)
 				end
 			end
 		end
@@ -1660,7 +2090,9 @@ task.spawn(function()
 			autoCollectState.collected[targetItem] = true
 			autoCollectState.attempts[targetItem]  = nil
 
-			if autoCollectState.delayTime and autoCollectState.delayTime > 0 then
+			if isFastWorldEvent then
+				lastLoopFast = true
+			elseif autoCollectState.delayTime and autoCollectState.delayTime > 0 then
 				if autoCollectState.statusTab and autoCollectState.statusTab.status then
 					autoCollectState.statusTab.status.Text = string.format("Waiting %.1fs...", autoCollectState.delayTime)
 					autoCollectState.statusTab.status.TextColor3 = C_SUB
@@ -1668,24 +2100,19 @@ task.spawn(function()
 				task.wait(autoCollectState.delayTime)
 			end
 		else
-			local att = autoCollectState.attempts[targetItem] or {count = 0}
-			att.count += 1
-			autoCollectState.attempts[targetItem] = att
+			local nextAtt = autoCollectState.attempts[targetItem] or {count = 0}
+			nextAtt.count += 1
+			autoCollectState.attempts[targetItem] = nextAtt
 
-			if att.count >= COLLECT_MAX_TRIES then
+			if nextAtt.count >= COLLECT_MAX_TRIES then
 				autoCollectState.collected[targetItem] = true
 				if autoCollectState.statusTab and autoCollectState.statusTab.status then
 					autoCollectState.statusTab.status.Text = "Gave up: " .. name
 					autoCollectState.statusTab.status.TextColor3 = C_WARN
 				end
-				task.wait(0.8)
+				task.wait(isFastWorldEvent and 0.15 or 0.8)
 			else
-				if autoCollectState.statusTab and autoCollectState.statusTab.status then
-					autoCollectState.statusTab.status.Text =
-						string.format("Retrying %s (%d/%d)", name, att.count, COLLECT_MAX_TRIES)
-					autoCollectState.statusTab.status.TextColor3 = C_WARN
-				end
-				task.wait(COLLECT_RETRY_DELAY)
+				task.wait(isFastWorldEvent and 0.15 or COLLECT_RETRY_DELAY)
 			end
 		end
 
@@ -1731,8 +2158,8 @@ end
 
 local function buildTabBody(tab, parentFrame)
 	local body = Instance.new("Frame")
-	body.Position              = UDim2.fromOffset(140, 36)
-	body.Size                  = UDim2.new(1, -140, 1, -80)
+	body.Position              = UDim2.fromOffset(141, 36)
+	body.Size                  = UDim2.new(1, -141, 1, -80)
 	body.BackgroundTransparency= 1
 	body.Visible               = false
 	body.Parent                = parentFrame
@@ -1756,7 +2183,7 @@ local function buildTabBody(tab, parentFrame)
 	toggleLbl.TextSize = 11
 	toggleLbl.TextColor3 = C_SUB
 	toggleLbl.BackgroundTransparency = 1
-	toggleLbl.Position = UDim2.fromOffset(12, 0)
+	toggleLbl.Position = UDim2.fromOffset(PAGE_PAD_X, 0)
 	toggleLbl.Size = UDim2.new(1, -100, 1, 0)
 	toggleLbl.TextXAlignment = Enum.TextXAlignment.Left
 	toggleLbl.Parent = toggleBar
@@ -1769,7 +2196,7 @@ local function buildTabBody(tab, parentFrame)
 	toggleBtn.BackgroundColor3 = C_ROW
 	toggleBtn.BorderSizePixel = 0
 	toggleBtn.Size = UDim2.fromOffset(44, 20)
-	toggleBtn.Position = UDim2.new(1, -56, 0.5, -10)
+	toggleBtn.Position = UDim2.new(1, -(PAGE_PAD_X + 44), 0.5, -10)
 	toggleBtn.Parent = toggleBar
 	corner(toggleBtn, 10)
 
@@ -1783,8 +2210,8 @@ local function buildTabBody(tab, parentFrame)
 	search.PlaceholderColor3 = C_SUB
 	search.BackgroundColor3  = C_PANEL
 	search.BorderSizePixel   = 0
-	search.Position          = UDim2.fromOffset(10, 46)
-	search.Size              = UDim2.new(1, -20, 0, 26)
+	search.Position          = UDim2.fromOffset(PAGE_PAD_X, 46)
+	search.Size              = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 26)
 	search.TextXAlignment    = Enum.TextXAlignment.Left
 	search.Parent            = body
 	corner(search, 6)
@@ -1797,13 +2224,13 @@ local function buildTabBody(tab, parentFrame)
 	status.TextColor3        = C_SUB
 	status.BackgroundTransparency = 1
 	status.TextXAlignment    = Enum.TextXAlignment.Left
-	status.Position          = UDim2.fromOffset(12, 76)
-	status.Size              = UDim2.new(1, -24, 0, 16)
+	status.Position          = UDim2.fromOffset(PAGE_PAD_X, 76)
+	status.Size              = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 16)
 	status.Parent            = body
 
 	local scroll = Instance.new("ScrollingFrame")
-	scroll.Position              = UDim2.fromOffset(10, 96)
-	scroll.Size                  = UDim2.new(1, -20, 1, -106)
+	scroll.Position              = UDim2.fromOffset(PAGE_PAD_X, 96)
+	scroll.Size                  = UDim2.new(1, PAGE_WIDTH_OFFSET, 1, -106)
 	scroll.BackgroundTransparency= 1
 	scroll.BorderSizePixel       = 0
 	scroll.ScrollBarThickness    = 5
@@ -1825,8 +2252,8 @@ local function buildTabBody(tab, parentFrame)
 	empty.TextColor3        = C_SUB
 	empty.BackgroundTransparency = 1
 	empty.TextWrapped       = true
-	empty.Position          = UDim2.fromOffset(10, 96)
-	empty.Size              = UDim2.new(1, -20, 1, -106)
+	empty.Position          = UDim2.fromOffset(PAGE_PAD_X, 96)
+	empty.Size              = UDim2.new(1, PAGE_WIDTH_OFFSET, 1, -106)
 	empty.Visible           = false
 	empty.Parent            = body
 
@@ -1840,8 +2267,8 @@ end
 
 local function buildMiscBody(tab, parentFrame)
 	local body = Instance.new("Frame")
-	body.Position              = UDim2.fromOffset(140, 36)
-	body.Size                  = UDim2.new(1, -140, 1, -80)
+	body.Position              = UDim2.fromOffset(141, 36)
+	body.Size                  = UDim2.new(1, -141, 1, -80)
 	body.BackgroundTransparency= 1
 	body.Visible               = false
 	body.Parent                = parentFrame
@@ -1852,19 +2279,19 @@ local function buildMiscBody(tab, parentFrame)
 	lblVisuals.TextSize = 12
 	lblVisuals.TextColor3 = C_ACCENT
 	lblVisuals.BackgroundTransparency = 1
-	lblVisuals.Position = UDim2.fromOffset(10, 10)
-	lblVisuals.Size = UDim2.new(1, -20, 0, 20)
+	lblVisuals.Position = UDim2.fromOffset(PAGE_PAD_X, 10)
+	lblVisuals.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 20)
 	lblVisuals.TextXAlignment = Enum.TextXAlignment.Left
 	lblVisuals.Parent = body
 
-	buildToggle(body, "Player ESP", UDim2.fromOffset(10, 35), false, function(state)
+	buildToggle(body, "Player ESP", 35, false, function(state)
 		espEnabled = state
 		updateESP()
-	end)
+	end, true)
 
-	buildToggle(body, "ESP Distance", UDim2.fromOffset(10, 75), false, function(state)
+	buildToggle(body, "ESP Distance", 75, false, function(state)
 		showEspDistance = state
-	end)
+	end, true)
 
 	local lblMove = Instance.new("TextLabel")
 	lblMove.Text = "Movement"
@@ -1872,28 +2299,28 @@ local function buildMiscBody(tab, parentFrame)
 	lblMove.TextSize = 12
 	lblMove.TextColor3 = C_ACCENT
 	lblMove.BackgroundTransparency = 1
-	lblMove.Position = UDim2.fromOffset(10, 125)
-	lblMove.Size = UDim2.new(1, -20, 0, 20)
+	lblMove.Position = UDim2.fromOffset(PAGE_PAD_X, 125)
+	lblMove.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 20)
 	lblMove.TextXAlignment = Enum.TextXAlignment.Left
 	lblMove.Parent = body
 
-	buildToggle(body, "Fly (WASD + Space/Shift)", UDim2.fromOffset(10, 150), false, function(state)
+	buildToggle(body, "Fly (WASD + Space/Shift)", 150, false, function(state)
 		toggleFly(state)
-	end)
+	end, true)
 
-	buildSlider(body, "Fly Speed", 10, 500, 50, UDim2.fromOffset(10, 190), true, function(val)
+	buildSlider(body, "Fly Speed", 10, 500, 50, 190, true, function(val)
 		flySpeed = val
 	end)
 
-	buildToggle(body, "Noclip", UDim2.fromOffset(10, 250), false, function(state)
+	buildToggle(body, "Noclip", 250, false, function(state)
 		toggleNoclip(state)
-	end)
+	end, true)
 
-	buildToggle(body, "Walkspeed", UDim2.fromOffset(10, 290), false, function(state)
+	buildToggle(body, "Walkspeed", 290, false, function(state)
 		toggleWalkspeed(state)
-	end)
+	end, true)
 
-	buildSlider(body, "Walkspeed Value", 16, 300, 16, UDim2.fromOffset(10, 330), true, function(val)
+	buildSlider(body, "Walkspeed Value", 16, 300, 16, 330, true, function(val)
 		wsSpeed = val
 	end)
 
@@ -1903,39 +2330,27 @@ end
 
 local function buildAutoCollectBody(tab, parentFrame)
 	local body = Instance.new("Frame")
-	body.Position              = UDim2.fromOffset(140, 36)
-	body.Size                  = UDim2.new(1, -140, 1, -80)
+	body.Position              = UDim2.fromOffset(141, 36)
+	body.Size                  = UDim2.new(1, -141, 1, -80)
 	body.BackgroundTransparency= 1
 	body.Visible               = false
 	body.Parent                = parentFrame
 
-	local infoLbl = Instance.new("TextLabel")
-	infoLbl.Text = "Auto-presses H (arrows/supplies) and R (scrap). No Stand needed for scrap!"
-	infoLbl.Font = Enum.Font.Gotham
-	infoLbl.TextSize = 11
-	infoLbl.TextColor3 = C_WARN
-	infoLbl.BackgroundTransparency = 1
-	infoLbl.TextXAlignment = Enum.TextXAlignment.Left
-	infoLbl.TextWrapped = true
-	infoLbl.Position = UDim2.fromOffset(12, 10)
-	infoLbl.Size = UDim2.new(1, -24, 0, 30)
-	infoLbl.Parent = body
-
 	local targetOpts = {"Spawned Items", "Buried Supplies", "Scrap Barges", "World Events"}
-	buildMultiDropdown(body, "Target Categories", targetOpts, UDim2.fromOffset(10, 46), function(selected)
+	buildMultiDropdown(body, "Target Categories", targetOpts, 14, function(selected)
 		autoCollectState.targets = selected
 	end)
 
 	local modeOpts = {"Teleport", "Tween"}
-	buildDropdown(body, "Movement Mode", modeOpts, 1, UDim2.fromOffset(10, 106), function(idx, val)
+	buildDropdown(body, "Movement Mode", modeOpts, 1, 74, function(_, val)
 		autoCollectState.mode = val
 	end)
 
-	buildSlider(body, "Tween Speed (studs/s)", 50, 1000, 250, UDim2.fromOffset(10, 166), true, function(val)
+	buildSlider(body, "Tween Speed (studs/s)", 50, 1000, 200, 134, true, function(val)
 		autoCollectState.tweenSpeed = val
 	end)
 
-	buildSlider(body, "Delay after collection (s)", 0, 5, 0, UDim2.fromOffset(10, 226), false, function(val)
+	buildSlider(body, "Delay after collection (s)", 0, 5, 0, 194, false, function(val)
 		autoCollectState.delayTime = val
 	end)
 
@@ -1946,8 +2361,8 @@ local function buildAutoCollectBody(tab, parentFrame)
 	startBtn.TextColor3 = C_TEXT
 	startBtn.BackgroundColor3 = C_ACCENT
 	startBtn.BorderSizePixel = 0
-	startBtn.Size = UDim2.new(1, -20, 0, 36)
-	startBtn.Position = UDim2.fromOffset(10, 286)
+	startBtn.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 36)
+	startBtn.Position = UDim2.fromOffset(PAGE_PAD_X, 254)
 	startBtn.Parent = body
 	corner(startBtn, 6)
 
@@ -1958,8 +2373,8 @@ local function buildAutoCollectBody(tab, parentFrame)
 	status.TextColor3 = C_SUB
 	status.BackgroundTransparency = 1
 	status.TextXAlignment = Enum.TextXAlignment.Left
-	status.Position = UDim2.fromOffset(12, 336)
-	status.Size = UDim2.new(1, -24, 0, 16)
+	status.Position = UDim2.fromOffset(PAGE_PAD_X, 304)
+	status.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 16)
 	status.Parent = body
 
 	startBtn.MouseButton1Click:Connect(function()
@@ -1981,12 +2396,11 @@ local function buildAutoCollectBody(tab, parentFrame)
 			status.Text = "Status: Running"
 			status.TextColor3 = C_OK
 		else
-			-- cancel any in-flight tween movement
 			if autoCollectState.cancelMove then
 				autoCollectState.cancelMove()
 				autoCollectState.cancelMove = nil
 			end
-			-- safety: ensure not anchored
+			clearTweenVisuals()
 			local c = LocalPlayer.Character
 			local h = c and c:FindFirstChild("HumanoidRootPart")
 			if h then h.Anchored = false end
@@ -2167,7 +2581,7 @@ local function createManager(tab)
 					local text = string.format("%.2f, %.2f, %.2f", pos.X, pos.Y, pos.Z)
 					if setclipboard then
 						pcall(setclipboard, text)
-						copyBtn.Text = "✔"
+						copyBtn.Text = "✓"
 						copyBtn.TextColor3 = C_OK
 						task.delay(1.5, function()
 							if copyBtn and copyBtn.Parent then
@@ -2331,8 +2745,10 @@ local function createManager(tab)
 				end)
 
 				for _, item in ipairs(list) do
-					shown += 1
-					createRow(item, shown)
+					if matchesFilter(item) then
+						shown += 1
+						createRow(item, shown)
+					end
 				end
 			end
 
@@ -2460,7 +2876,7 @@ end
 --=====================================================================
 returnBtn.MouseButton1Click:Connect(function()
 	local ok, err = returnToSaved()
-	if activeTab then
+	if activeTab and activeTab.status then
 		if ok then
 			activeTab.status.Text = "Returned to your saved position."
 			activeTab.status.TextColor3 = C_SUB
@@ -2551,11 +2967,6 @@ minBtn.MouseButton1Click:Connect(function()
 	minBtn.Text = minimized and "+" or "-"
 
 	if minimized then
-		TweenService:Create(headerCorner, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			BottomLeftRadius = UDim.new(0, 10),
-			BottomRightRadius = UDim.new(0, 10)
-		}):Play()
-
 		tabBar.Visible = false
 		separator.Visible = false
 		footer.Visible = false
@@ -2565,11 +2976,6 @@ minBtn.MouseButton1Click:Connect(function()
 			Size = collapsedSize
 		}):Play()
 	else
-		TweenService:Create(headerCorner, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			BottomLeftRadius = UDim.new(0, 0),
-			BottomRightRadius = UDim.new(0, 0)
-		}):Play()
-
 		TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Size = expandedSize
 		}):Play()
