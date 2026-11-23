@@ -1,13 +1,9 @@
 --!nocheck
 --=====================================================================
--- Stand Out Dashboard v50 
---   * Scrap Barge double-TP fixed; only re-teleports on retry #3, #4, #5
---   * Keybind selector now displays "Click to bind"
---   * Tab content shifted/centered + slider track inset (no separator overlap)
---   * Tween line reworked into a thin, glowing fishing line; default speed = 200
---   * GUI spawns centered near the upper-middle of the screen (avoids chat)
---   * Sonar ping + Highlight visual overhaul (diamond reticle + dual wave + pulse)
---   * World Events: "Pile of Money" holds H for 15s; other drops collect at lightspeed
+-- Stand Out Dashboard v53 (Madium + Xeno compatible)
+--   * Reverted tacky UI extras; kept clean obsidian shading & v53 tag
+--   * Kept Spawn Route tab & straight-line laser tween path
+--   * Fixed Highlight stutter/jitter (static Highlight + unrotated smooth rings)
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -24,30 +20,40 @@ local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 
 local TEXT_HZ             = 8
 local COLLECT_MAX_TRIES   = 5
-local COLLECT_RETRY_DELAY = 1.2
-local TELEPORT_SETTLE     = 0.5
-local TWEEN_SETTLE        = 0.35
+local COLLECT_RETRY_DELAY = 1.0
+local TELEPORT_SETTLE     = 0.45
+local TWEEN_SETTLE        = 0.3
 
--- UI Palette
-local C_BG          = Color3.fromRGB(22, 24, 29)
-local C_PANEL       = Color3.fromRGB(32, 35, 41)
-local C_ROW         = Color3.fromRGB(42, 46, 54)
-local C_ROW_HOT     = Color3.fromRGB(56, 61, 72)
-local C_ACCENT      = Color3.fromRGB(100, 0, 255)
+-- Clean Obsidian & Violet Palette
+local C_BG          = Color3.fromRGB(16, 18, 23)
+local C_HEADER      = Color3.fromRGB(22, 25, 32)
+local C_PANEL       = Color3.fromRGB(28, 32, 41)
+local C_ROW         = Color3.fromRGB(32, 36, 46)
+local C_ROW_HOT     = Color3.fromRGB(44, 49, 62)
+local C_STROKE      = Color3.fromRGB(48, 54, 68)
+local C_ACCENT      = Color3.fromRGB(110, 40, 235)
+local C_ACCENT_SOFT = Color3.fromRGB(88, 32, 195)
 local C_ACCENT_DIM  = Color3.fromRGB(68, 32, 135)
-local C_TEXT        = Color3.fromRGB(236, 239, 244)
-local C_SUB         = Color3.fromRGB(145, 153, 168)
-local C_OK          = Color3.fromRGB(72, 214, 128)
-local C_WARN        = Color3.fromRGB(255, 186, 92)
-local C_ERR         = Color3.fromRGB(255, 120, 110)
+local C_TEXT        = Color3.fromRGB(238, 241, 246)
+local C_SUB         = Color3.fromRGB(145, 155, 172)
+local C_OK          = Color3.fromRGB(65, 205, 135)
+local C_WARN        = Color3.fromRGB(245, 185, 75)
+local C_ERR         = Color3.fromRGB(240, 105, 105)
 
-local HL_FILL        = Color3.fromRGB(170, 60, 255)
-local HL_OUTLINE     = Color3.fromRGB(230, 195, 255)
-local TWEEN_HL_COLOR = Color3.fromRGB(255, 235, 90)
+local HL_FILL        = Color3.fromRGB(175, 70, 255)
+local HL_OUTLINE     = Color3.fromRGB(235, 215, 255)
+local TWEEN_HL_COLOR = Color3.fromRGB(250, 204, 21)
 
 local activeTab
 local updateCountLabel
 local tabs = {}
+
+-- Clean up any leftover markers/highlights from previous executions
+for _, desc in ipairs(workspace:GetDescendants()) do
+	if desc.Name == "SIM_Marker" or desc.Name == "SIM_Highlight" or desc.Name == "SIM_TweenHighlight" or desc.Name == "SIM_TweenTargetNode" then
+		desc:Destroy()
+	end
+end
 
 --=====================================================================
 -- STATIC COORDINATES
@@ -168,7 +174,7 @@ local function updateScrapBeacons()
 			beacon.Anchored = true
 			beacon.CanCollide = false
 			beacon.Transparency = 1
-			beacon.Size = Vector3.new(1,1,1)
+			beacon.Size = Vector3.new(1, 1, 1)
 			beacon.Parent = scrapBeaconFolder
 		end
 		if beacon.Position ~= g.position then
@@ -312,6 +318,16 @@ local function corner(parent, r)
 	c.CornerRadius = UDim.new(0, r or 6)
 	c.Parent = parent
 	return c
+end
+
+local function stroke(parent, color, thickness, transparency)
+	local s = Instance.new("UIStroke")
+	s.Color = color or C_STROKE
+	s.Thickness = thickness or 1
+	s.Transparency = transparency or 0
+	s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	s.Parent = parent
+	return s
 end
 
 local function getDisplayName(item, tabName)
@@ -484,12 +500,12 @@ local function notifySpawn(item, tabName)
 end
 
 --=====================================================================
--- Highlight + Sonar Ping Overhaul (Diamond Reticle + Dual Wave + Pulse)
+-- Highlight + Smooth Unrotated Sonar Ring (Zero Stutter / Zero Jitter)
 --=====================================================================
 local highlights = {}
 local activeMarkers = {}
 
-local function buildMarker(part, hl)
+local function buildMarker(part)
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name           = "SIM_Marker"
 	billboard.Size           = UDim2.fromOffset(180, 180)
@@ -499,138 +515,80 @@ local function buildMarker(part, hl)
 	billboard.Adornee        = part
 	billboard.Parent         = part
 
-	-- Outer rotating diamond reticle
-	local diamond = Instance.new("Frame")
-	diamond.AnchorPoint          = Vector2.new(0.5, 0.5)
-	diamond.Position             = UDim2.fromScale(0.5, 0.5)
-	diamond.Size                 = UDim2.fromOffset(22, 22)
-	diamond.Rotation             = 45
-	diamond.BackgroundColor3     = HL_FILL
-	diamond.BackgroundTransparency = 0.55
-	diamond.BorderSizePixel      = 0
-	diamond.Parent               = billboard
-	corner(diamond, 4)
+	-- Solid center beacon dot (unrotated so BillboardGui never jitters)
+	local dot = Instance.new("Frame")
+	dot.AnchorPoint      = Vector2.new(0.5, 0.5)
+	dot.Position         = UDim2.fromScale(0.5, 0.5)
+	dot.Size             = UDim2.fromOffset(16, 16)
+	dot.BackgroundColor3 = HL_FILL
+	dot.BorderSizePixel  = 0
+	dot.Parent           = billboard
+	corner(dot, 8)
 
-	local diamondStroke = Instance.new("UIStroke")
-	diamondStroke.Color       = HL_OUTLINE
-	diamondStroke.Thickness   = 2
-	diamondStroke.Transparency = 0.1
-	diamondStroke.Parent      = diamond
+	local dotStroke = Instance.new("UIStroke")
+	dotStroke.Color     = HL_OUTLINE
+	dotStroke.Thickness = 2.5
+	dotStroke.Parent    = dot
 
-	-- Bright inner core dot
+	-- Inner white core
 	local core = Instance.new("Frame")
 	core.AnchorPoint      = Vector2.new(0.5, 0.5)
 	core.Position         = UDim2.fromScale(0.5, 0.5)
-	core.Size             = UDim2.fromOffset(8, 8)
-	core.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	core.Size             = UDim2.fromOffset(6, 6)
+	core.BackgroundColor3 = Color3.new(1, 1, 1)
 	core.BorderSizePixel  = 0
 	core.Parent           = billboard
-	corner(core, 4)
+	corner(core, 3)
 
-	-- Primary sonar wave (circular)
-	local ring1 = Instance.new("Frame")
-	ring1.AnchorPoint            = Vector2.new(0.5, 0.5)
-	ring1.Position               = UDim2.fromScale(0.5, 0.5)
-	ring1.Size                   = UDim2.fromOffset(22, 22)
-	ring1.BackgroundTransparency = 1
-	ring1.BorderSizePixel        = 0
-	ring1.Parent                 = billboard
-	corner(ring1, 999)
+	-- Smooth expanding circular sonar ring
+	local ring = Instance.new("Frame")
+	ring.AnchorPoint            = Vector2.new(0.5, 0.5)
+	ring.Position               = UDim2.fromScale(0.5, 0.5)
+	ring.Size                   = UDim2.fromOffset(18, 18)
+	ring.BackgroundTransparency = 1
+	ring.BorderSizePixel        = 0
+	ring.Parent                 = billboard
+	corner(ring, 999)
 
-	local stroke1 = Instance.new("UIStroke")
-	stroke1.Color        = HL_FILL
-	stroke1.Thickness    = 2.5
-	stroke1.Transparency = 0
-	stroke1.Parent       = ring1
+	local ringStroke = Instance.new("UIStroke")
+	ringStroke.Color        = HL_OUTLINE
+	ringStroke.Thickness    = 2.2
+	ringStroke.Transparency = 0
+	ringStroke.Parent       = ring
 
-	-- Secondary staggered sonar wave (diamond echo)
-	local ring2 = Instance.new("Frame")
-	ring2.AnchorPoint            = Vector2.new(0.5, 0.5)
-	ring2.Position               = UDim2.fromScale(0.5, 0.5)
-	ring2.Size                   = UDim2.fromOffset(22, 22)
-	ring2.Rotation               = 45
-	ring2.BackgroundTransparency = 1
-	ring2.BorderSizePixel        = 0
-	ring2.Parent                 = billboard
-	corner(ring2, 8)
+	local tInfo       = TweenInfo.new(1.6, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local tweenRing   = TweenService:Create(ring, tInfo, {Size = UDim2.fromOffset(150, 150)})
+	local tweenStroke = TweenService:Create(ringStroke, tInfo, {Transparency = 1})
 
-	local stroke2 = Instance.new("UIStroke")
-	stroke2.Color        = HL_OUTLINE
-	stroke2.Thickness    = 1.8
-	stroke2.Transparency = 0.15
-	stroke2.Parent       = ring2
-
-	local tInfo1 = TweenInfo.new(1.5, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-	local tInfo2 = TweenInfo.new(1.5, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+	-- Trigger first wave immediately on creation
+	tweenRing:Play()
+	tweenStroke:Play()
 
 	table.insert(activeMarkers, {
 		gui         = billboard,
-		hl          = hl,
-		diamond     = diamond,
-		core        = core,
-		ring1       = ring1,
-		stroke1     = stroke1,
-		ring2       = ring2,
-		stroke2     = stroke2,
-		tweenRing1  = TweenService:Create(ring1, tInfo1, {Size = UDim2.fromOffset(165, 165)}),
-		tweenStr1   = TweenService:Create(stroke1, tInfo1, {Transparency = 1, Thickness = 0.5}),
-		tweenRing2  = TweenService:Create(ring2, tInfo2, {Size = UDim2.fromOffset(125, 125), Rotation = 135}),
-		tweenStr2   = TweenService:Create(stroke2, tInfo2, {Transparency = 1}),
+		ring        = ring,
+		stroke      = ringStroke,
+		tweenRing   = tweenRing,
+		tweenStroke = tweenStroke,
 	})
 
 	return billboard
 end
 
 task.spawn(function()
-	local cycle = 0
 	while true do
-		cycle += 1
+		task.wait(1.7)
 		for i = #activeMarkers, 1, -1 do
 			local m = activeMarkers[i]
 			if not m.gui or not m.gui.Parent then
 				table.remove(activeMarkers, i)
 			else
-				-- Primary wave launch
-				m.ring1.Size = UDim2.fromOffset(22, 22)
-				m.stroke1.Transparency = 0.05
-				m.stroke1.Thickness = 2.5
-				m.tweenRing1:Play()
-				m.tweenStr1:Play()
-
-				-- Reticle & 3D Highlight breathing pulse
-				local targetRot = (cycle % 2 == 0) and 45 or 135
-				TweenService:Create(m.diamond, TweenInfo.new(0.8, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-					Rotation = targetRot,
-					Size = UDim2.fromOffset(26, 26),
-				}):Play()
-				if m.hl and m.hl.Parent then
-					TweenService:Create(m.hl, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-						FillTransparency = 0.15,
-						OutlineTransparency = 0,
-					}):Play()
-				end
-
-				-- Staggered secondary diamond echo + settle back
-				task.delay(0.35, function()
-					if not m.gui or not m.gui.Parent then return end
-					m.ring2.Size = UDim2.fromOffset(22, 22)
-					m.ring2.Rotation = 45
-					m.stroke2.Transparency = 0.15
-					m.tweenRing2:Play()
-					m.tweenStr2:Play()
-					TweenService:Create(m.diamond, TweenInfo.new(0.65, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-						Size = UDim2.fromOffset(20, 20),
-					}):Play()
-					if m.hl and m.hl.Parent then
-						TweenService:Create(m.hl, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-							FillTransparency = 0.42,
-							OutlineTransparency = 0.2,
-						}):Play()
-					end
-				end)
+				m.ring.Size = UDim2.fromOffset(18, 18)
+				m.stroke.Transparency = 0
+				m.tweenRing:Play()
+				m.tweenStroke:Play()
 			end
 		end
-		task.wait(1.55)
 	end
 end)
 
@@ -649,7 +607,7 @@ local function applyHighlight(item, part)
 	hl.Adornee             = adorn
 	hl.Parent              = adorn
 
-	highlights[item] = { highlight = hl, marker = buildMarker(part, hl) }
+	highlights[item] = { highlight = hl, marker = buildMarker(part) }
 end
 
 local function clearHighlight(item)
@@ -679,12 +637,12 @@ local function getItemPosition(item)
 	return nil
 end
 
-local function teleportToPosition(targetPos)
+local function teleportToPosition(targetPos, keepAnchored)
 	local char = LocalPlayer.Character
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return false, "Character not available." end
 	if not savedPosition then savedPosition = hrp.CFrame end
-	hrp.Anchored = false
+	hrp.Anchored = (keepAnchored == true)
 	hrp.AssemblyLinearVelocity = Vector3.zero
 	hrp.AssemblyAngularVelocity = Vector3.zero
 	hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))
@@ -692,10 +650,10 @@ local function teleportToPosition(targetPos)
 	return true
 end
 
-local function teleportToItem(item)
+local function teleportToItem(item, keepAnchored)
 	local pos = getItemPosition(item)
 	if not pos then return false, "Item has no position." end
-	return teleportToPosition(pos)
+	return teleportToPosition(pos, keepAnchored)
 end
 
 local function returnToSaved()
@@ -759,7 +717,7 @@ local function createESPForPlayer(p)
 	txtName.Text = p.Name
 	txtName.TextColor3 = Color3.fromRGB(255, 0, 0)
 	txtName.TextStrokeTransparency = 0
-	txtName.TextStrokeColor3 = Color3.new(0,0,0)
+	txtName.TextStrokeColor3 = Color3.new(0, 0, 0)
 	txtName.Font = Enum.Font.GothamBold
 	txtName.TextSize = 16
 	txtName.Parent = bb
@@ -771,7 +729,7 @@ local function createESPForPlayer(p)
 	txtDist.Text = ""
 	txtDist.TextColor3 = Color3.fromRGB(255, 0, 0)
 	txtDist.TextStrokeTransparency = 0
-	txtDist.TextStrokeColor3 = Color3.new(0,0,0)
+	txtDist.TextStrokeColor3 = Color3.new(0, 0, 0)
 	txtDist.Font = Enum.Font.GothamBold
 	txtDist.TextSize = 14
 	txtDist.Parent = bb
@@ -937,7 +895,12 @@ end)
 -- Noclip (Fixed for multi-wall collisions without breaking pickups)
 --=====================================================================
 local noclipEnabled = false
+local routeNoclipActive = false
 local origCollide = {}
+
+local function isAnyNoclipActive()
+	return noclipEnabled or routeNoclipActive
+end
 
 local function setCharCollide(char, disableCollide)
 	if not char then return end
@@ -971,13 +934,20 @@ end
 
 local function toggleNoclip(state)
 	noclipEnabled = state
-	if not state then
+	if not isAnyNoclipActive() then
+		setCharCollide(LocalPlayer.Character, false)
+	end
+end
+
+local function setRouteNoclip(state)
+	routeNoclipActive = state
+	if not isAnyNoclipActive() then
 		setCharCollide(LocalPlayer.Character, false)
 	end
 end
 
 RunService.Stepped:Connect(function()
-	if not noclipEnabled then return end
+	if not isAnyNoclipActive() then return end
 	setCharCollide(LocalPlayer.Character, true)
 end)
 
@@ -1010,7 +980,7 @@ RunService.Stepped:Connect(function()
 end)
 
 --=====================================================================
--- GUI shell (Spawns centered horizontally, closer to top of screen)
+-- GUI Shell (Clean Obsidian Shading + Version Tag)
 --=====================================================================
 local gui = Instance.new("ScreenGui")
 gui.Name         = "SpawnedItemsMonitor"
@@ -1019,32 +989,33 @@ gui.DisplayOrder = 999
 gui.Parent       = PlayerGui
 
 local toggleBtn = Instance.new("TextButton")
-toggleBtn.Size              = UDim2.fromOffset(34, 34)
-toggleBtn.Position          = UDim2.new(1, -44, 0, 44)
+toggleBtn.Size              = UDim2.fromOffset(36, 36)
+toggleBtn.Position          = UDim2.new(1, -46, 0, 44)
 toggleBtn.Text              = "SO"
 toggleBtn.Font              = Enum.Font.GothamBold
 toggleBtn.TextSize          = 12
 toggleBtn.TextColor3        = C_TEXT
 toggleBtn.BackgroundColor3  = C_ACCENT
-toggleBtn.BackgroundTransparency = 0.2
+toggleBtn.BackgroundTransparency = 0.1
 toggleBtn.Visible           = false
 toggleBtn.Parent            = gui
-corner(toggleBtn, 17)
+corner(toggleBtn, 18)
 
 local main = Instance.new("Frame")
 main.Name             = "Main"
-main.Position         = UDim2.new(0.5, -240, 0.12, 0) -- Centered, upper-middle (clear of chat)
-main.Size             = UDim2.fromOffset(480, 460)
+main.Position         = UDim2.new(0.5, -245, 0.12, 0)
+main.Size             = UDim2.fromOffset(490, 464)
 main.BackgroundColor3 = C_BG
 main.BorderSizePixel  = 0
 main.ClipsDescendants = true
 main.Parent           = gui
 corner(main, 10)
+stroke(main, C_STROKE, 1, 0.25)
 
 local header = Instance.new("Frame")
 header.Name             = "Header"
-header.Size             = UDim2.new(1, 0, 0, 36)
-header.BackgroundColor3 = C_PANEL
+header.Size             = UDim2.new(1, 0, 0, 38)
+header.BackgroundColor3 = C_HEADER
 header.BorderSizePixel  = 0
 header.Active           = false
 header.ZIndex           = 10
@@ -1061,11 +1032,24 @@ title.TextSize          = 14
 title.TextColor3        = C_TEXT
 title.BackgroundTransparency = 1
 title.Position          = UDim2.fromOffset(12, 0)
-title.Size              = UDim2.fromOffset(160, 36)
+title.Size              = UDim2.fromOffset(152, 38)
 title.TextXAlignment    = Enum.TextXAlignment.Left
 title.Active            = false
 title.ZIndex            = 10
 title.Parent            = header
+
+local verLabel = Instance.new("TextLabel")
+verLabel.Text              = "v53"
+verLabel.Font              = Enum.Font.Code
+verLabel.TextSize          = 11
+verLabel.TextColor3        = C_SUB
+verLabel.BackgroundTransparency = 1
+verLabel.Position          = UDim2.fromOffset(162, 1)
+verLabel.Size              = UDim2.fromOffset(26, 38)
+verLabel.TextXAlignment    = Enum.TextXAlignment.Left
+verLabel.Active            = false
+verLabel.ZIndex            = 10
+verLabel.Parent            = header
 
 local countLabel = Instance.new("TextLabel")
 countLabel.Text             = "0"
@@ -1073,9 +1057,9 @@ countLabel.Font             = Enum.Font.GothamBold
 countLabel.TextSize         = 11
 countLabel.TextColor3       = C_TEXT
 countLabel.BackgroundColor3 = C_ACCENT
-countLabel.BackgroundTransparency = 0.2
-countLabel.Size             = UDim2.fromOffset(40, 22)
-countLabel.Position         = UDim2.fromOffset(160, 7)
+countLabel.BackgroundTransparency = 0.15
+countLabel.Size             = UDim2.fromOffset(65, 22)
+countLabel.Position         = UDim2.fromOffset(192, 8)
 countLabel.Active           = false
 countLabel.ZIndex           = 10
 countLabel.Parent           = header
@@ -1105,8 +1089,8 @@ closeBtn.Parent            = header
 
 local tabBar = Instance.new("Frame")
 tabBar.Name             = "TabBar"
-tabBar.Position         = UDim2.fromOffset(0, 36)
-tabBar.Size             = UDim2.new(0, 140, 1, -80)
+tabBar.Position         = UDim2.fromOffset(0, 38)
+tabBar.Size             = UDim2.new(0, 142, 1, -82)
 tabBar.BackgroundColor3 = C_BG
 tabBar.BorderSizePixel  = 0
 tabBar.Parent           = main
@@ -1115,28 +1099,20 @@ local tabList = Instance.new("UIListLayout")
 tabList.FillDirection       = Enum.FillDirection.Vertical
 tabList.HorizontalAlignment = Enum.HorizontalAlignment.Center
 tabList.VerticalAlignment   = Enum.VerticalAlignment.Top
-tabList.Padding             = UDim.new(0, 6)
+tabList.Padding             = UDim.new(0, 5)
 tabList.Parent              = tabBar
 
 local tabPad = Instance.new("UIPadding")
-tabPad.PaddingTop = UDim.new(0, 10)
+tabPad.PaddingTop = UDim.new(0, 8)
 tabPad.Parent = tabBar
 
 local separator = Instance.new("Frame")
-separator.Size = UDim2.new(0, 1, 1, -36)
-separator.Position = UDim2.fromOffset(140, 36)
-separator.BackgroundColor3 = Color3.fromRGB(40, 43, 50)
+separator.Size = UDim2.new(0, 1, 1, -38)
+separator.Position = UDim2.fromOffset(142, 38)
+separator.BackgroundColor3 = C_STROKE
+separator.BackgroundTransparency = 0.35
 separator.BorderSizePixel = 0
 separator.Parent = main
-
-local sepGradient = Instance.new("UIGradient")
-sepGradient.Color = ColorSequence.new{
-	ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 33, 38)),
-	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(60, 65, 75)),
-	ColorSequenceKeypoint.new(1, Color3.fromRGB(30, 33, 38))
-}
-sepGradient.Rotation = 90
-sepGradient.Parent = separator
 
 local footer = Instance.new("Frame")
 footer.Name                    = "Footer"
@@ -1153,13 +1129,14 @@ returnBtn.TextSize         = 12
 returnBtn.TextColor3       = C_TEXT
 returnBtn.BackgroundColor3 = C_PANEL
 returnBtn.BorderSizePixel  = 0
-returnBtn.Position         = UDim2.fromOffset(156, 7)
-returnBtn.Size             = UDim2.new(1, -172, 0, 30)
+returnBtn.Position         = UDim2.fromOffset(158, 7)
+returnBtn.Size             = UDim2.new(1, -174, 0, 30)
 returnBtn.Parent           = footer
 corner(returnBtn, 6)
+stroke(returnBtn, C_STROKE, 1, 0.35)
 
 --=====================================================================
--- Dropdown, Slider & Keybind Toggle Helpers (Centered & Inset)
+-- Dropdown, Slider & Keybind Toggle Helpers
 --=====================================================================
 local PAGE_PAD_X = 16
 local PAGE_WIDTH_OFFSET = -(PAGE_PAD_X * 2)
@@ -1201,6 +1178,7 @@ local function buildDropdown(parent, label, options, defaultIndex, yOffset, onCh
 	button.TextXAlignment = Enum.TextXAlignment.Left
 	button.Parent = container
 	corner(button, 6)
+	stroke(button, C_STROKE, 1, 0.35)
 	local sp = Instance.new("UIPadding"); sp.PaddingLeft = UDim.new(0, 8); sp.Parent = button
 
 	local arrow = Instance.new("TextLabel")
@@ -1223,6 +1201,7 @@ local function buildDropdown(parent, label, options, defaultIndex, yOffset, onCh
 	optionsFrame.ZIndex = 20
 	optionsFrame.Parent = container
 	corner(optionsFrame, 6)
+	stroke(optionsFrame, C_STROKE, 1, 0.25)
 
 	local optList = Instance.new("UIListLayout")
 	optList.Padding = UDim.new(0, 2)
@@ -1295,6 +1274,7 @@ local function buildMultiDropdown(parent, label, options, yOffset, onChange)
 	button.TextXAlignment = Enum.TextXAlignment.Left
 	button.Parent = container
 	corner(button, 6)
+	stroke(button, C_STROKE, 1, 0.35)
 	local sp = Instance.new("UIPadding"); sp.PaddingLeft = UDim.new(0, 8); sp.Parent = button
 
 	local arrow = Instance.new("TextLabel")
@@ -1317,6 +1297,7 @@ local function buildMultiDropdown(parent, label, options, yOffset, onChange)
 	optionsFrame.ZIndex = 20
 	optionsFrame.Parent = container
 	corner(optionsFrame, 6)
+	stroke(optionsFrame, C_STROKE, 1, 0.25)
 
 	local optList = Instance.new("UIListLayout")
 	optList.Padding = UDim.new(0, 2)
@@ -1427,7 +1408,6 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, yOffset, i
 	labelLbl.TextXAlignment = Enum.TextXAlignment.Left
 	labelLbl.Parent = container
 
-	-- Inset slider track by 8px on left so the 16px thumb at 0% never overhangs the left edge
 	local sliderFrame = Instance.new("Frame")
 	sliderFrame.Size = UDim2.new(1, -74, 0, 20)
 	sliderFrame.Position = UDim2.new(0, 8, 0, 18)
@@ -1467,6 +1447,7 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, yOffset, i
 	textBox.Text = isInt and string.format("%d", defaultVal) or string.format("%.1f", defaultVal)
 	textBox.Parent = container
 	corner(textBox, 4)
+	stroke(textBox, C_STROKE, 1, 0.35)
 
 	local currentVal = defaultVal
 
@@ -1612,6 +1593,7 @@ local function buildToggle(parent, label, yOffset, defaultState, onChange, allow
 		kbBtn.TextTruncate = Enum.TextTruncate.AtEnd
 		kbBtn.Parent = container
 		corner(kbBtn, 5)
+		stroke(kbBtn, C_STROKE, 1, 0.35)
 
 		local entry = {
 			key = nil,
@@ -1644,28 +1626,8 @@ local function buildToggle(parent, label, yOffset, defaultState, onChange, allow
 end
 
 --=====================================================================
--- Auto Collect Logic (v50 - Thin Glowing Fishing Line + Fast World Events)
+-- Straight-Line Laser Pathfinder Visuals (Kept from v52)
 --=====================================================================
-local autoCollectState = {
-	running      = false,
-	targets      = {},
-	mode         = "Teleport",
-	collected    = {},
-	attempts     = {},
-	busy         = false,
-	statusTab    = nil,
-	tweenSpeed   = 200, -- Default set to 200
-	delayTime    = 0,
-	cancelMove   = nil,
-}
-
-local VK_CODES = {
-	H = 0x48,
-	R = 0x52,
-	E = 0x45,
-}
-
--- Tween Visuals (Glowing thin fishing line + yellow Highlight)
 local tweenVisuals = {
 	highlight  = nil,
 	targetNode = nil,
@@ -1707,7 +1669,7 @@ local function createTweenVisuals(hrp, item, targetPos)
 		hl.Name = "SIM_TweenHighlight"
 		hl.FillColor = TWEEN_HL_COLOR
 		hl.FillTransparency = 0.25
-		hl.OutlineColor = Color3.fromRGB(255, 255, 190)
+		hl.OutlineColor = Color3.fromRGB(255, 255, 200)
 		hl.OutlineTransparency = 0
 		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
 		hl.Adornee = adorn
@@ -1722,7 +1684,7 @@ local function createTweenVisuals(hrp, item, targetPos)
 
 	local targetNode = Instance.new("Part")
 	targetNode.Name = "SIM_TweenTargetNode"
-	targetNode.Size = Vector3.new(0.3, 0.3, 0.3)
+	targetNode.Size = Vector3.new(0.25, 0.25, 0.25)
 	targetNode.Position = targetPos
 	targetNode.Anchored = true
 	targetNode.CanCollide = false
@@ -1736,26 +1698,43 @@ local function createTweenVisuals(hrp, item, targetPos)
 	targetAtt.Name = "SIM_TweenAtt1"
 	targetAtt.Parent = targetNode
 
-	-- Inner thin bright white-yellow fishing line core
+	local lockGui = Instance.new("BillboardGui")
+	lockGui.Name = "SIM_TargetLock"
+	lockGui.Size = UDim2.fromOffset(28, 28)
+	lockGui.AlwaysOnTop = true
+	lockGui.LightInfluence = 0
+	lockGui.Adornee = targetNode
+	lockGui.Parent = targetNode
+
+	local lockDot = Instance.new("Frame")
+	lockDot.AnchorPoint = Vector2.new(0.5, 0.5)
+	lockDot.Position = UDim2.fromScale(0.5, 0.5)
+	lockDot.Size = UDim2.fromOffset(12, 12)
+	lockDot.BackgroundColor3 = TWEEN_HL_COLOR
+	lockDot.BackgroundTransparency = 0.25
+	lockDot.BorderSizePixel = 0
+	lockDot.Parent = lockGui
+	corner(lockDot, 6)
+	stroke(lockDot, Color3.fromRGB(255, 255, 220), 1.8, 0)
+
 	local coreBeam = Instance.new("Beam")
 	coreBeam.Name = "SIM_TweenCoreBeam"
 	coreBeam.Attachment0 = hrpAtt
 	coreBeam.Attachment1 = targetAtt
-	coreBeam.Color = ColorSequence.new(Color3.fromRGB(255, 255, 210), Color3.fromRGB(255, 240, 120))
+	coreBeam.Color = ColorSequence.new(Color3.fromRGB(255, 255, 230), Color3.fromRGB(255, 245, 140))
 	coreBeam.Transparency = NumberSequence.new(0)
 	coreBeam.LightInfluence = 0
 	coreBeam.LightEmission = 1
-	coreBeam.Brightness = 4
+	coreBeam.Brightness = 5
 	coreBeam.FaceCamera = true
-	coreBeam.Segments = 30
-	coreBeam.CurveSize0 = 1.4
-	coreBeam.CurveSize1 = -1.4
-	coreBeam.Width0 = 0.08
-	coreBeam.Width1 = 0.08
+	coreBeam.Segments = 1
+	coreBeam.CurveSize0 = 0
+	coreBeam.CurveSize1 = 0
+	coreBeam.Width0 = 0.06
+	coreBeam.Width1 = 0.06
 	coreBeam.Parent = targetNode
 	tweenVisuals.coreBeam = coreBeam
 
-	-- Outer soft golden neon aura
 	local glowBeam = Instance.new("Beam")
 	glowBeam.Name = "SIM_TweenGlowBeam"
 	glowBeam.Attachment0 = hrpAtt
@@ -1764,16 +1743,38 @@ local function createTweenVisuals(hrp, item, targetPos)
 	glowBeam.Transparency = NumberSequence.new(0.45)
 	glowBeam.LightInfluence = 0
 	glowBeam.LightEmission = 1
-	glowBeam.Brightness = 3
+	glowBeam.Brightness = 3.5
 	glowBeam.FaceCamera = true
-	glowBeam.Segments = 30
-	glowBeam.CurveSize0 = 1.4
-	glowBeam.CurveSize1 = -1.4
-	glowBeam.Width0 = 0.24
-	glowBeam.Width1 = 0.24
+	glowBeam.Segments = 1
+	glowBeam.CurveSize0 = 0
+	glowBeam.CurveSize1 = 0
+	glowBeam.Width0 = 0.22
+	glowBeam.Width1 = 0.22
 	glowBeam.Parent = targetNode
 	tweenVisuals.glowBeam = glowBeam
 end
+
+--=====================================================================
+-- Auto Collect Logic
+--=====================================================================
+local autoCollectState = {
+	running      = false,
+	targets      = {},
+	mode         = "Teleport",
+	collected    = {},
+	attempts     = {},
+	busy         = false,
+	statusTab    = nil,
+	tweenSpeed   = 200,
+	delayTime    = 0,
+	cancelMove   = nil,
+}
+
+local VK_CODES = {
+	H = 0x48,
+	R = 0x52,
+	E = 0x45,
+}
 
 local function triggerPromptsOnItem(targetItem, holdTime)
 	if not targetItem then return end
@@ -1784,7 +1785,7 @@ local function triggerPromptsOnItem(targetItem, holdTime)
 			end
 			pcall(function()
 				desc:InputHoldBegin()
-				task.wait(math.max(holdTime or 0.1, desc.HoldDuration + 0.05))
+				task.wait(math.max(holdTime or 0.05, desc.HoldDuration + 0.03))
 				desc:InputHoldEnd()
 			end)
 		end
@@ -1792,14 +1793,15 @@ local function triggerPromptsOnItem(targetItem, holdTime)
 end
 
 local function simulateKey(key, holdTime, targetItem)
-	holdTime = holdTime or 0.08
+	holdTime = holdTime or 0.05
 	local kc = Enum.KeyCode[key]
 	local vk = VK_CODES[key] or (kc and kc.Value)
 
-	-- Smart wait: if holding for a long duration (e.g. 15s Pile of Money), release early as soon as item despawns
 	local function smartHoldWait(duration)
 		if duration <= 0.25 or not targetItem then
-			task.wait(duration)
+			if duration > 0 then
+				task.wait(duration)
+			end
 			return
 		end
 		local t0 = os.clock()
@@ -1847,15 +1849,15 @@ local function getCollectAction(item, catName)
 	if catName == "Buried Supplies" then
 		return {key = "H", holdTime = 1.3, multiHolds = 2, hint = "Holding H for supplies..."}
 	elseif catName == "Scrap Barges" then
-		return {key = "R", holdTime = 0.12, multiHolds = 1}
+		return {key = "R", holdTime = 0.05, multiHolds = 1}
 	elseif catName == "World Events" then
 		if isPileOfMoney(item) then
 			return {key = "H", holdTime = 15.0, multiHolds = 1, isMoneyPile = true, hint = "Holding H (15s) for Pile of Money..."}
 		else
-			return {key = "H", holdTime = 0.05, multiHolds = 1, fastChain = true}
+			return {key = "H", holdTime = 0.02, multiHolds = 1, fastChain = true}
 		end
 	else
-		return {key = "H", holdTime = 0.1, multiHolds = 1}
+		return {key = "H", holdTime = 0.08, multiHolds = 1}
 	end
 end
 
@@ -1896,7 +1898,7 @@ local function getItemsForCategory(catName)
 	return items
 end
 
-local function moveToItem(item, onComplete)
+local function moveToItem(item, keepAnchoredOnArrive, onComplete)
 	local targetPos = getItemPosition(item)
 	if not targetPos then
 		if onComplete then onComplete(false) end
@@ -1944,7 +1946,7 @@ local function moveToItem(item, onComplete)
 		if not cancelled and autoCollectState.running then
 			hrp.CFrame = endCF
 		end
-		hrp.Anchored = false
+		hrp.Anchored = (keepAnchoredOnArrive == true and not cancelled and autoCollectState.running)
 		hrp.AssemblyLinearVelocity = Vector3.zero
 		hrp.AssemblyAngularVelocity = Vector3.zero
 	end
@@ -1956,7 +1958,11 @@ local lastLoopFast = false
 
 task.spawn(function()
 	while true do
-		task.wait(lastLoopFast and 0.03 or 0.25)
+		if lastLoopFast then
+			task.wait()
+		else
+			task.wait(0.25)
+		end
 		lastLoopFast = false
 
 		if not autoCollectState.running then continue end
@@ -1991,6 +1997,7 @@ task.spawn(function()
 		end
 
 		if #available == 0 then
+			if hrp and hrp.Parent then hrp.Anchored = false end
 			if autoCollectState.statusTab and autoCollectState.statusTab.status then
 				autoCollectState.statusTab.status.Text = "Waiting for items..."
 				autoCollectState.statusTab.status.TextColor3 = C_SUB
@@ -2009,6 +2016,7 @@ task.spawn(function()
 		local name       = getDisplayName(targetItem, targetCat == "World Events" and "World Events" or "Items")
 		local action     = getCollectAction(targetItem, targetCat)
 		local isFastWorldEvent = (action and action.fastChain == true)
+		local isScrapBarge     = (targetCat == "Scrap Barges")
 
 		local att = autoCollectState.attempts[targetItem]
 		local retryNum = att and att.count or 0
@@ -2030,34 +2038,62 @@ task.spawn(function()
 		local distToTarget = (targetData.pos - hrp.Position).Magnitude
 		local moved = false
 
-		-- Move once on initial visit (distToTarget > 12), and only re-teleport/tween on retries past retry #2 (retry 3, 4, 5)
-		local shouldMove = (distToTarget > 12) or (retryNum >= 3)
+		local retryMoveThreshold = (targetCat == "Buried Supplies") and 2 or 3
+		local shouldMove = (distToTarget > 12) or (retryNum >= retryMoveThreshold)
 
 		if shouldMove then
 			if autoCollectState.mode == "Teleport" then
-				local ok = teleportToItem(targetItem)
+				local ok = teleportToItem(targetItem, isScrapBarge)
 				moved = ok == true
 				if moved then
-					task.wait(isFastWorldEvent and 0.05 or TELEPORT_SETTLE)
+					if isFastWorldEvent then
+						RunService.Heartbeat:Wait()
+					elseif isScrapBarge then
+						task.wait(0.06)
+					else
+						task.wait(TELEPORT_SETTLE)
+					end
 				end
 			elseif autoCollectState.mode == "Tween" then
 				local ok = false
-				moveToItem(targetItem, function(s) ok = s end)
+				moveToItem(targetItem, isScrapBarge, function(s) ok = s end)
 				moved = ok
 				if moved then
-					task.wait(isFastWorldEvent and 0.04 or TWEEN_SETTLE)
+					if isFastWorldEvent then
+						RunService.Heartbeat:Wait()
+					elseif isScrapBarge then
+						task.wait(0.06)
+					else
+						task.wait(TWEEN_SETTLE)
+					end
 				end
 			end
 		else
+			if isScrapBarge and hrp and hrp.Parent then
+				hrp.Anchored = true
+				hrp.AssemblyLinearVelocity = Vector3.zero
+				hrp.AssemblyAngularVelocity = Vector3.zero
+			end
 			moved = true
 		end
 
 		if not autoCollectState.running then
+			if hrp and hrp.Parent then hrp.Anchored = false end
 			autoCollectState.busy = false
 			continue
 		end
 
 		if moved and targetItem:IsDescendantOf(workspace) and action then
+			if isScrapBarge and hrp and hrp.Parent then
+				local bPos = getItemPosition(targetItem)
+				if bPos then
+					local lookAt = Vector3.new(bPos.X, hrp.Position.Y, bPos.Z)
+					if (lookAt - hrp.Position).Magnitude > 0.1 then
+						hrp.CFrame = CFrame.new(hrp.Position, lookAt)
+					end
+				end
+			end
+
 			if autoCollectState.statusTab and autoCollectState.statusTab.status then
 				if action.hint then
 					autoCollectState.statusTab.status.Text = action.hint
@@ -2071,19 +2107,28 @@ task.spawn(function()
 			for _ = 1, (action.multiHolds or 1) do
 				if not targetItem:IsDescendantOf(workspace) then break end
 				if not autoCollectState.running then break end
-				task.spawn(triggerPromptsOnItem, targetItem, action.holdTime)
+				if not isScrapBarge then
+					task.spawn(triggerPromptsOnItem, targetItem, action.holdTime)
+				end
 				simulateKey(action.key, action.holdTime, targetItem)
-				task.wait(isFastWorldEvent and 0.04 or 0.25)
-			end
-
-			-- Wait for Scrap Barge break animation / server despawn before checking if it still exists
-			if targetCat == "Scrap Barges" then
-				local waitStart = os.clock()
-				while targetItem:IsDescendantOf(workspace) and (os.clock() - waitStart) < 1.1 do
-					if not autoCollectState.running then break end
-					task.wait(0.1)
+				if not isFastWorldEvent and not isScrapBarge then
+					task.wait(0.2)
 				end
 			end
+
+			if isScrapBarge then
+				local waitStart = os.clock()
+				while targetItem:IsDescendantOf(workspace) and (os.clock() - waitStart) < 0.75 do
+					if not autoCollectState.running then break end
+					task.wait(0.05)
+				end
+			end
+		end
+
+		if isScrapBarge and hrp and hrp.Parent then
+			hrp.Anchored = false
+			hrp.AssemblyLinearVelocity = Vector3.zero
+			hrp.AssemblyAngularVelocity = Vector3.zero
 		end
 
 		if not targetItem:IsDescendantOf(workspace) then
@@ -2110,15 +2155,210 @@ task.spawn(function()
 					autoCollectState.statusTab.status.Text = "Gave up: " .. name
 					autoCollectState.statusTab.status.TextColor3 = C_WARN
 				end
-				task.wait(isFastWorldEvent and 0.15 or 0.8)
+				task.wait(isFastWorldEvent and 0.08 or 0.6)
 			else
-				task.wait(isFastWorldEvent and 0.15 or COLLECT_RETRY_DELAY)
+				task.wait(isFastWorldEvent and 0.08 or (isScrapBarge and 0.45 or COLLECT_RETRY_DELAY))
 			end
 		end
 
 		autoCollectState.busy = false
 	end
 end)
+
+--=====================================================================
+-- Temporary Spawn Route Logic (Arrow Spawns Only)
+--=====================================================================
+local spawnRouteState = {
+	running     = false,
+	speed       = 75,
+	pauseTime   = 3.0,
+	loopRoute   = false,
+	useNoclip   = true,
+	cancelMove  = nil,
+	statusLabel = nil,
+	progressLbl = nil,
+	startBtn    = nil,
+}
+
+local function gatherArrowSpawnNodes()
+	local gameFolder = workspace:FindFirstChild("Game")
+	local nodesFolder = gameFolder and gameFolder:FindFirstChild("ItemSpawnNodes")
+	if not nodesFolder then return {} end
+
+	local targetRoot = nodesFolder:FindFirstChild("Arrows") or nodesFolder
+	local raw = {}
+
+	for _, desc in ipairs(targetRoot:GetDescendants()) do
+		local isArrowNode = (targetRoot.Name == "Arrows")
+			or (desc.Name:lower():find("arrow", 1, true) ~= nil)
+			or (desc.Parent and desc.Parent.Name:lower():find("arrow", 1, true) ~= nil)
+
+		if isArrowNode then
+			if desc:IsA("BasePart") then
+				table.insert(raw, {
+					inst = desc,
+					name = desc.Name,
+					pos  = desc.Position,
+				})
+			elseif desc:IsA("Model") and not desc:FindFirstChildWhichIsA("BasePart") then
+				local ok, cf = pcall(function() return desc:GetPivot() end)
+				if ok and cf then
+					table.insert(raw, {
+						inst = desc,
+						name = desc.Name,
+						pos  = cf.Position,
+					})
+				end
+			end
+		end
+	end
+
+	local ordered = {}
+	local char = LocalPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local currentPos = hrp and hrp.Position or Vector3.zero
+
+	while #raw > 0 do
+		local bestIdx = 1
+		local bestDist = math.huge
+		for i, node in ipairs(raw) do
+			local d = (node.pos - currentPos).Magnitude
+			if d < bestDist then
+				bestDist = d
+				bestIdx = i
+			end
+		end
+		local chosen = table.remove(raw, bestIdx)
+		table.insert(ordered, chosen)
+		currentPos = chosen.pos
+	end
+
+	return ordered
+end
+
+local function tweenRouteToNode(nodeData)
+	local char = LocalPlayer.Character
+	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return false end
+
+	local startCF  = hrp.CFrame
+	local endCF    = CFrame.new(nodeData.pos + Vector3.new(0, 3, 0))
+	local dist     = (startCF.Position - endCF.Position).Magnitude
+	local duration = math.max(0.1, dist / math.max(1, spawnRouteState.speed))
+
+	createTweenVisuals(hrp, nodeData.inst, nodeData.pos)
+
+	hrp.Anchored = true
+	local cancelled = false
+	spawnRouteState.cancelMove = function() cancelled = true end
+
+	local t0 = os.clock()
+	while os.clock() - t0 < duration do
+		if cancelled or not spawnRouteState.running then
+			cancelled = true
+			break
+		end
+		local alpha = math.clamp((os.clock() - t0) / duration, 0, 1)
+		if hrp and hrp.Parent then
+			hrp.CFrame = startCF:Lerp(endCF, alpha)
+		end
+		task.wait()
+	end
+
+	spawnRouteState.cancelMove = nil
+	if hrp and hrp.Parent then
+		if not cancelled and spawnRouteState.running then
+			hrp.CFrame = endCF
+		end
+		hrp.Anchored = (not cancelled and spawnRouteState.running)
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
+	end
+	return not cancelled
+end
+
+local function stopSpawnRoute(reasonText)
+	spawnRouteState.running = false
+	if spawnRouteState.cancelMove then
+		spawnRouteState.cancelMove()
+		spawnRouteState.cancelMove = nil
+	end
+	clearTweenVisuals()
+	setRouteNoclip(false)
+
+	local char = LocalPlayer.Character
+	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		hrp.Anchored = false
+		hrp.AssemblyLinearVelocity = Vector3.zero
+	end
+
+	if spawnRouteState.startBtn then
+		spawnRouteState.startBtn.Text = "Start Arrow Route"
+		spawnRouteState.startBtn.BackgroundColor3 = C_ACCENT
+	end
+	if spawnRouteState.statusLabel then
+		spawnRouteState.statusLabel.Text = reasonText or "Status: Idle"
+		spawnRouteState.statusLabel.TextColor3 = C_SUB
+	end
+	updateCountLabel()
+end
+
+local function runSpawnRoute()
+	task.spawn(function()
+		while spawnRouteState.running do
+			local nodes = gatherArrowSpawnNodes()
+			if #nodes == 0 then
+				stopSpawnRoute("No Arrow spawn nodes found.")
+				return
+			end
+
+			if spawnRouteState.useNoclip then
+				setRouteNoclip(true)
+			end
+
+			for idx, node in ipairs(nodes) do
+				if not spawnRouteState.running then break end
+
+				if spawnRouteState.progressLbl then
+					spawnRouteState.progressLbl.Text = string.format("Progress: %d / %d (%s)", idx, #nodes, node.name)
+				end
+				if spawnRouteState.statusLabel then
+					spawnRouteState.statusLabel.Text = "Tweening to: " .. node.name
+					spawnRouteState.statusLabel.TextColor3 = C_OK
+				end
+
+				local arrived = tweenRouteToNode(node)
+				if not arrived or not spawnRouteState.running then
+					clearTweenVisuals()
+					break
+				end
+
+				local pStart = os.clock()
+				while (os.clock() - pStart) < spawnRouteState.pauseTime do
+					if not spawnRouteState.running then break end
+					local rem = math.max(0, spawnRouteState.pauseTime - (os.clock() - pStart))
+					if spawnRouteState.statusLabel then
+						spawnRouteState.statusLabel.Text = string.format("At %s — Pausing (%.1fs)...", node.name, rem)
+						spawnRouteState.statusLabel.TextColor3 = C_WARN
+					end
+					task.wait(0.1)
+				end
+
+				clearTweenVisuals()
+			end
+
+			if not spawnRouteState.running then
+				break
+			end
+
+			if not spawnRouteState.loopRoute then
+				stopSpawnRoute("Route complete! Visited all " .. #nodes .. " arrow spawns.")
+				break
+			end
+		end
+	end)
+end
 
 --=====================================================================
 -- tab configs
@@ -2138,6 +2378,7 @@ tabs = {
 		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("WorldEventDrops") end, },
 	{ name = "Auto Collect", isAutoCollect = true, },
 	{ name = "Miscellaneous", isMisc = true, },
+	{ name = "Spawn Route", isSpawnRoute = true, },
 }
 
 local function buildTabBtn(tab, index, parentFrame)
@@ -2150,7 +2391,7 @@ local function buildTabBtn(tab, index, parentFrame)
 	btn.BorderSizePixel  = 0
 	btn.LayoutOrder      = index
 	btn.TextXAlignment   = Enum.TextXAlignment.Center
-	btn.Size             = UDim2.new(1, -40, 0, 28)
+	btn.Size             = UDim2.new(1, -36, 0, 26)
 	btn.Parent           = parentFrame
 	corner(btn, 6)
 	return btn
@@ -2158,22 +2399,24 @@ end
 
 local function buildTabBody(tab, parentFrame)
 	local body = Instance.new("Frame")
-	body.Position              = UDim2.fromOffset(141, 36)
-	body.Size                  = UDim2.new(1, -141, 1, -80)
+	body.Position              = UDim2.fromOffset(143, 38)
+	body.Size                  = UDim2.new(1, -143, 1, -82)
 	body.BackgroundTransparency= 1
 	body.Visible               = false
 	body.Parent                = parentFrame
 
 	local toggleBar = Instance.new("Frame")
 	toggleBar.Size = UDim2.new(1, 0, 0, 36)
-	toggleBar.BackgroundColor3 = Color3.fromRGB(28, 30, 35)
+	toggleBar.BackgroundColor3 = C_HEADER
+	toggleBar.BackgroundTransparency = 0.25
 	toggleBar.BorderSizePixel = 0
 	toggleBar.Parent = body
 
 	local toggleBorder = Instance.new("Frame")
 	toggleBorder.Size = UDim2.new(1, 0, 0, 1)
 	toggleBorder.Position = UDim2.new(0, 0, 1, -1)
-	toggleBorder.BackgroundColor3 = Color3.fromRGB(40, 43, 50)
+	toggleBorder.BackgroundColor3 = C_STROKE
+	toggleBorder.BackgroundTransparency = 0.45
 	toggleBorder.BorderSizePixel = 0
 	toggleBorder.Parent = toggleBar
 
@@ -2215,6 +2458,7 @@ local function buildTabBody(tab, parentFrame)
 	search.TextXAlignment    = Enum.TextXAlignment.Left
 	search.Parent            = body
 	corner(search, 6)
+	stroke(search, C_STROKE, 1, 0.35)
 	local sp = Instance.new("UIPadding"); sp.PaddingLeft = UDim.new(0, 8); sp.Parent = search
 
 	local status = Instance.new("TextLabel")
@@ -2243,7 +2487,10 @@ local function buildTabBody(tab, parentFrame)
 	ll.Padding = UDim.new(0, 4); ll.SortOrder = Enum.SortOrder.LayoutOrder
 	ll.Parent = scroll
 	local lp = Instance.new("UIPadding")
-	lp.PaddingRight = UDim.new(0, 4); lp.Parent = scroll
+	lp.PaddingTop = UDim.new(0, 1)
+	lp.PaddingLeft = UDim.new(0, 1)
+	lp.PaddingRight = UDim.new(0, 5)
+	lp.Parent = scroll
 
 	local empty = Instance.new("TextLabel")
 	empty.Text              = tab.emptyText
@@ -2257,18 +2504,18 @@ local function buildTabBody(tab, parentFrame)
 	empty.Visible           = false
 	empty.Parent            = body
 
-	tab.body   = body
+	tab.body      = body
 	tab.toggleBtn = toggleBtn
-	tab.search = search
-	tab.status = status
-	tab.scroll = scroll
-	tab.empty  = empty
+	tab.search    = search
+	tab.status    = status
+	tab.scroll    = scroll
+	tab.empty     = empty
 end
 
 local function buildMiscBody(tab, parentFrame)
 	local body = Instance.new("Frame")
-	body.Position              = UDim2.fromOffset(141, 36)
-	body.Size                  = UDim2.new(1, -141, 1, -80)
+	body.Position              = UDim2.fromOffset(143, 38)
+	body.Size                  = UDim2.new(1, -143, 1, -82)
 	body.BackgroundTransparency= 1
 	body.Visible               = false
 	body.Parent                = parentFrame
@@ -2277,7 +2524,7 @@ local function buildMiscBody(tab, parentFrame)
 	lblVisuals.Text = "Visuals"
 	lblVisuals.Font = Enum.Font.GothamBold
 	lblVisuals.TextSize = 12
-	lblVisuals.TextColor3 = C_ACCENT
+	lblVisuals.TextColor3 = C_ACCENT_SOFT
 	lblVisuals.BackgroundTransparency = 1
 	lblVisuals.Position = UDim2.fromOffset(PAGE_PAD_X, 10)
 	lblVisuals.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 20)
@@ -2297,7 +2544,7 @@ local function buildMiscBody(tab, parentFrame)
 	lblMove.Text = "Movement"
 	lblMove.Font = Enum.Font.GothamBold
 	lblMove.TextSize = 12
-	lblMove.TextColor3 = C_ACCENT
+	lblMove.TextColor3 = C_ACCENT_SOFT
 	lblMove.BackgroundTransparency = 1
 	lblMove.Position = UDim2.fromOffset(PAGE_PAD_X, 125)
 	lblMove.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 20)
@@ -2330,8 +2577,8 @@ end
 
 local function buildAutoCollectBody(tab, parentFrame)
 	local body = Instance.new("Frame")
-	body.Position              = UDim2.fromOffset(141, 36)
-	body.Size                  = UDim2.new(1, -141, 1, -80)
+	body.Position              = UDim2.fromOffset(143, 38)
+	body.Size                  = UDim2.new(1, -143, 1, -82)
 	body.BackgroundTransparency= 1
 	body.Visible               = false
 	body.Parent                = parentFrame
@@ -2381,6 +2628,9 @@ local function buildAutoCollectBody(tab, parentFrame)
 		closeAllDropdowns(body)
 		autoCollectState.running = not autoCollectState.running
 		if autoCollectState.running then
+			if spawnRouteState.running then
+				stopSpawnRoute("Stopped (Auto Collect started)")
+			end
 			local char = LocalPlayer.Character
 			local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 			if hrp and not savedPosition then
@@ -2422,12 +2672,121 @@ local function buildAutoCollectBody(tab, parentFrame)
 	autoCollectState.statusTab = tab
 end
 
+local function buildSpawnRouteBody(tab, parentFrame)
+	local body = Instance.new("Frame")
+	body.Position              = UDim2.fromOffset(143, 38)
+	body.Size                  = UDim2.new(1, -143, 1, -82)
+	body.BackgroundTransparency= 1
+	body.Visible               = false
+	body.Parent                = parentFrame
+
+	local headerLbl = Instance.new("TextLabel")
+	headerLbl.Text = "Arrow Spawn Tour (Temporary v53)"
+	headerLbl.Font = Enum.Font.GothamBold
+	headerLbl.TextSize = 12
+	headerLbl.TextColor3 = C_ACCENT_SOFT
+	headerLbl.BackgroundTransparency = 1
+	headerLbl.Position = UDim2.fromOffset(PAGE_PAD_X, 10)
+	headerLbl.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 20)
+	headerLbl.TextXAlignment = Enum.TextXAlignment.Left
+	headerLbl.Parent = body
+
+	buildSlider(body, "Route Tween Speed (studs/s)", 20, 300, 75, 36, true, function(val)
+		spawnRouteState.speed = val
+	end)
+
+	buildSlider(body, "Pause at Each Spawn (s)", 0.5, 10, 3.0, 94, false, function(val)
+		spawnRouteState.pauseTime = val
+	end)
+
+	buildToggle(body, "Auto-Noclip During Route", 154, true, function(state)
+		spawnRouteState.useNoclip = state
+		if spawnRouteState.running then
+			setRouteNoclip(state)
+		end
+	end, false)
+
+	buildToggle(body, "Loop Route Continuously", 192, false, function(state)
+		spawnRouteState.loopRoute = state
+	end, false)
+
+	local startBtn = Instance.new("TextButton")
+	startBtn.Text = "Start Arrow Route"
+	startBtn.Font = Enum.Font.GothamBold
+	startBtn.TextSize = 12
+	startBtn.TextColor3 = C_TEXT
+	startBtn.BackgroundColor3 = C_ACCENT
+	startBtn.BorderSizePixel = 0
+	startBtn.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 36)
+	startBtn.Position = UDim2.fromOffset(PAGE_PAD_X, 234)
+	startBtn.Parent = body
+	corner(startBtn, 6)
+
+	local progressLbl = Instance.new("TextLabel")
+	progressLbl.Text = "Progress: Ready"
+	progressLbl.Font = Enum.Font.GothamBold
+	progressLbl.TextSize = 11
+	progressLbl.TextColor3 = C_TEXT
+	progressLbl.BackgroundTransparency = 1
+	progressLbl.TextXAlignment = Enum.TextXAlignment.Left
+	progressLbl.Position = UDim2.fromOffset(PAGE_PAD_X, 280)
+	progressLbl.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 16)
+	progressLbl.Parent = body
+
+	local status = Instance.new("TextLabel")
+	status.Text = "Status: Idle"
+	status.Font = Enum.Font.Gotham
+	status.TextSize = 11
+	status.TextColor3 = C_SUB
+	status.BackgroundTransparency = 1
+	status.TextXAlignment = Enum.TextXAlignment.Left
+	status.TextWrapped = true
+	status.Position = UDim2.fromOffset(PAGE_PAD_X, 300)
+	status.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 32)
+	status.Parent = body
+
+	startBtn.MouseButton1Click:Connect(function()
+		if not spawnRouteState.running then
+			if autoCollectState.running then
+				autoCollectState.running = false
+				if autoCollectState.statusTab and autoCollectState.statusTab.startBtn then
+					autoCollectState.statusTab.startBtn.Text = "Start Auto Collect"
+					autoCollectState.statusTab.startBtn.BackgroundColor3 = C_ACCENT
+				end
+			end
+
+			local char = LocalPlayer.Character
+			local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+			if hrp and not savedPosition then
+				savedPosition = hrp.CFrame
+			end
+
+			spawnRouteState.running = true
+			startBtn.Text = "Stop Arrow Route"
+			startBtn.BackgroundColor3 = C_ERR
+			updateCountLabel()
+			runSpawnRoute()
+		else
+			stopSpawnRoute("Status: Stopped")
+		end
+	end)
+
+	tab.body = body
+	tab.state = { shownCount = 0 }
+	tab.status = status
+	spawnRouteState.statusLabel = status
+	spawnRouteState.progressLbl = progressLbl
+	spawnRouteState.startBtn = startBtn
+end
+
 for i, tab in ipairs(tabs) do
 	tab.tabBtn = buildTabBtn(tab, i - 1, tabBar)
 	if tab.isAutoCollect then
 		buildAutoCollectBody(tab, main)
 	elseif tab.isMisc then
 		buildMiscBody(tab, main)
+	elseif tab.isSpawnRoute then
+		buildSpawnRouteBody(tab, main)
 	else
 		buildTabBody(tab, main)
 	end
@@ -2456,7 +2815,7 @@ local function createManager(tab)
 			tab.toggleBtn.BackgroundColor3 = C_ROW
 		end
 
-		for item, data in pairs(state.rows) do
+		for _, data in pairs(state.rows) do
 			if state.showDistance then
 				data.info.Text = "Calculating..."
 			else
@@ -2494,6 +2853,7 @@ local function createManager(tab)
 		row.LayoutOrder      = order
 		row.Parent           = tab.scroll
 		corner(row, 6)
+		stroke(row, C_STROKE, 1, 0.45)
 
 		local nameLabel = Instance.new("TextLabel")
 		nameLabel.BackgroundTransparency = 1
@@ -2524,9 +2884,6 @@ local function createManager(tab)
 		tp.Font             = Enum.Font.GothamBold
 		tp.TextSize         = 11
 		tp.TextColor3       = Color3.new(1, 1, 1)
-		tp.TextStrokeColor3 = Color3.new(0, 0, 0)
-		tp.TextStrokeTransparency = 0.5
-
 		tp.BackgroundColor3 = part and C_ACCENT or C_ROW_HOT
 		tp.BorderSizePixel  = 0
 		tp.Position         = UDim2.new(1, -66, 0.5, -14)
@@ -2726,18 +3083,18 @@ local function createManager(tab)
 				if #list == 0 then return end
 				shown += 1
 				local hd = Instance.new("TextLabel")
-				hd.Size = UDim2.new(1, 0, 0, 28)
+				hd.Size = UDim2.new(1, 0, 0, 26)
 				hd.BackgroundTransparency = 1
 				hd.Text = groupName
 				hd.Font = Enum.Font.GothamBold
 				hd.TextSize = 12
-				hd.TextColor3 = C_ACCENT
+				hd.TextColor3 = C_ACCENT_SOFT
 				hd.TextXAlignment = Enum.TextXAlignment.Left
 				hd.LayoutOrder = shown
 				hd.Parent = tab.scroll
 
 				local pad = Instance.new("UIPadding")
-				pad.PaddingLeft = UDim.new(0, 8)
+				pad.PaddingLeft = UDim.new(0, 6)
 				pad.Parent = hd
 
 				table.sort(list, function(a, b)
@@ -2794,7 +3151,7 @@ local function createManager(tab)
 end
 
 for _, tab in ipairs(tabs) do
-	if not tab.isAutoCollect and not tab.isMisc then
+	if not tab.isAutoCollect and not tab.isMisc and not tab.isSpawnRoute then
 		createManager(tab)
 	end
 end
@@ -2815,6 +3172,16 @@ updateCountLabel = function()
 		end
 		countLabel.Size = UDim2.fromOffset(70, 22)
 		return
+	elseif activeTab.isSpawnRoute then
+		if spawnRouteState.running then
+			countLabel.Text = "TOURING"
+			countLabel.BackgroundColor3 = C_OK
+		else
+			countLabel.Text = "ROUTE"
+			countLabel.BackgroundColor3 = C_ACCENT
+		end
+		countLabel.Size = UDim2.fromOffset(65, 22)
+		return
 	elseif activeTab.isMisc then
 		countLabel.Text = "TOOLS"
 		countLabel.BackgroundColor3 = C_ACCENT
@@ -2823,11 +3190,7 @@ updateCountLabel = function()
 	end
 
 	local count = activeTab.state.shownCount or 0
-	if activeTab.name == "Items" then
-		countLabel.Text = count .. " spawned"
-		countLabel.Size = UDim2.fromOffset(75, 22)
-		countLabel.BackgroundColor3 = C_ACCENT
-	elseif activeTab.name == "Supplies" then
+	if activeTab.name == "Items" or activeTab.name == "Supplies" then
 		countLabel.Text = count .. " spawned"
 		countLabel.Size = UDim2.fromOffset(75, 22)
 		countLabel.BackgroundColor3 = C_ACCENT
@@ -2857,11 +3220,11 @@ local function showTab(tab)
 		t.body.Visible = isSelected
 
 		t.tabBtn.BackgroundColor3 = isSelected and C_PANEL or C_BG
-		t.tabBtn.TextColor3       = isSelected and C_TEXT   or C_SUB
+		t.tabBtn.TextColor3       = isSelected and C_TEXT  or C_SUB
 		t.tabBtn.Font             = isSelected and Enum.Font.GothamBold or Enum.Font.Gotham
 
 		TweenService:Create(t.tabBtn, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Size = isSelected and UDim2.new(1, -20, 0, 36) or UDim2.new(1, -40, 0, 28)
+			Size = isSelected and UDim2.new(1, -18, 0, 32) or UDim2.new(1, -36, 0, 26)
 		}):Play()
 	end
 	updateCountLabel()
@@ -2959,8 +3322,8 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 local minimized     = false
-local expandedSize  = UDim2.fromOffset(480, 460)
-local collapsedSize = UDim2.fromOffset(480, 36)
+local expandedSize  = UDim2.fromOffset(490, 464)
+local collapsedSize = UDim2.fromOffset(490, 38)
 
 minBtn.MouseButton1Click:Connect(function()
 	minimized = not minimized
@@ -3000,7 +3363,7 @@ end)
 -- filter changes (Debounced)
 --=====================================================================
 for _, tab in ipairs(tabs) do
-	if not tab.isAutoCollect and not tab.isMisc then
+	if not tab.isAutoCollect and not tab.isMisc and not tab.isSpawnRoute then
 		local searchDebounce = false
 		tab.search:GetPropertyChangedSignal("Text"):Connect(function()
 			if searchDebounce then return end
@@ -3025,9 +3388,9 @@ end
 task.spawn(function()
 	while true do
 		task.wait(1 / TEXT_HZ)
-		if activeTab and not activeTab.isAutoCollect and not activeTab.isMisc then
+		if activeTab and not activeTab.isAutoCollect and not activeTab.isMisc and not activeTab.isSpawnRoute then
 			local ppos = playerPosition()
-			for item, data in pairs(activeTab.state.rows) do
+			for _, data in pairs(activeTab.state.rows) do
 				local p = data.part
 				if p and p:IsDescendantOf(workspace) then
 					if activeTab.state.showDistance then
@@ -3066,7 +3429,7 @@ task.spawn(function()
 	while true do
 		task.wait(1.5)
 		for _, tab in ipairs(tabs) do
-			if tab.isAutoCollect or tab.isMisc then continue end
+			if tab.isAutoCollect or tab.isMisc or tab.isSpawnRoute then continue end
 			if tab.getContainer() ~= tab.state.lastContainer then
 				tab.rebuild()
 			end
@@ -3079,7 +3442,7 @@ end)
 --=====================================================================
 showTab(tabs[1])
 for _, tab in ipairs(tabs) do
-	if not tab.isAutoCollect and not tab.isMisc then
+	if not tab.isAutoCollect and not tab.isMisc and not tab.isSpawnRoute then
 		tab.rebuild()
 	end
 end
