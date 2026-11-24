@@ -1,19 +1,20 @@
 --!nocheck
 --=====================================================================
--- Stand Out Dashboard v60 (Madium + Xeno compatible)
+-- Stand Out Dashboard v61 (Madium + Xeno compatible)
 --   * Instance de-dup: re-executing kills old instance cleanly
---     (fixes 2 autofarms fighting → anti-cheat blocks pickups)
+--   * 15x15 invisible platform under player on Scrap Barge teleports
+--   * Fixed Auto Collect stalling on "Waiting for items..."
+--     (temporary cooldown instead of permanent blacklist + deep scan)
 --   * One-shot return-to-origin while waiting
 --   * Scrap refresh: full rebuild, change detect, 1s poll
---   * Barge strike: fresh teleport per attempt, no anchoring,
+--   * Barge strike: fresh teleport per attempt, platform support,
 --     all 4 input paths fired per attempt (tabbed-out safe)
---   * waitUntilStable prevents H press during teleport fall
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 --=====================================================================
--- Instance de-duplication (v60)
+-- Instance de-duplication (v61)
 --=====================================================================
 local _INSTANCE_ID = tostring(os.time()) .. "_" .. tostring(math.random(1, 1e9))
 _G.StandOut_ActiveID = _INSTANCE_ID
@@ -37,6 +38,7 @@ local COLLECT_MAX_TRIES   = 5
 local COLLECT_RETRY_DELAY = 0.65
 local TELEPORT_SETTLE     = 0.45
 local TWEEN_SETTLE        = 0.3
+local SKIP_COOLDOWN       = 8.0
 
 local CATEGORY_PRIORITY = {
 	["Spawned Items"]   = 1,
@@ -69,7 +71,11 @@ local updateCountLabel
 local tabs = {}
 
 for _, desc in ipairs(workspace:GetDescendants()) do
-	if desc.Name == "SIM_Marker" or desc.Name == "SIM_Highlight" or desc.Name == "SIM_TweenHighlight" or desc.Name == "SIM_TweenTargetNode" then
+	if desc.Name == "SIM_Marker"
+		or desc.Name == "SIM_Highlight"
+		or desc.Name == "SIM_TweenHighlight"
+		or desc.Name == "SIM_TweenTargetNode"
+		or desc.Name == "SIM_BargePlatform" then
 		desc:Destroy()
 	end
 end
@@ -141,7 +147,7 @@ for _, data in ipairs(STATIC_TELEPORTS) do
 end
 
 --=====================================================================
--- helpers
+-- helpers & 15x15 Barge Platform
 --=====================================================================
 local function getPart(inst)
 	if not inst then return nil end
@@ -161,8 +167,44 @@ local function getItemPosition(item)
 	if item and item:IsA("Model") then
 		local ok, cf = pcall(function() return item:GetPivot() end)
 		if ok and cf then return cf.Position end
+		local okBox, boxCF = pcall(function() return item:GetBoundingBox() end)
+		if okBox and boxCF then return boxCF.Position end
 	end
 	return nil
+end
+
+local bargePlatform = nil
+
+local function removeBargePlatform()
+	if bargePlatform then
+		pcall(function() bargePlatform:Destroy() end)
+		bargePlatform = nil
+	end
+	for _, obj in ipairs(workspace:GetChildren()) do
+		if obj.Name == "SIM_BargePlatform" then
+			obj:Destroy()
+		end
+	end
+end
+
+local function ensureBargePlatform(standPos)
+	if not bargePlatform or not bargePlatform.Parent then
+		removeBargePlatform()
+		local plat = Instance.new("Part")
+		plat.Name = "SIM_BargePlatform"
+		plat.Size = Vector3.new(15, 1, 15)
+		plat.Anchored = true
+		plat.CanCollide = true
+		plat.CanTouch = false
+		plat.CanQuery = false
+		plat.Transparency = 1
+		plat.Material = Enum.Material.SmoothPlastic
+		plat.Parent = workspace
+		bargePlatform = plat
+	end
+	-- Place platform top surface right at the player's feet (~3.5 studs below HRP)
+	bargePlatform.CFrame = CFrame.new(standPos - Vector3.new(0, 3.5, 0))
+	return bargePlatform
 end
 
 -- Stand ~2.5 studs back, 1.5 studs up, facing debris.
@@ -179,7 +221,7 @@ local function getBargeStandCFrame(bargePos, refPos)
 end
 
 --=====================================================================
--- Scrap Barges Radar (v60 - full rebuild, change detect, 1s poll)
+-- Scrap Barges Radar (v61 - full rebuild, change detect, 1s poll)
 --=====================================================================
 local scrapBeaconFolder = workspace:FindFirstChild("SIM_ScrapBeacons")
 if scrapBeaconFolder then scrapBeaconFolder:Destroy() end
@@ -255,7 +297,9 @@ local function scheduleScrapUpdate()
 	scrapUpdateScheduled = true
 	task.delay(0.25, function()
 		scrapUpdateScheduled = false
-		updateScrapBeacons()
+		if isInstanceAlive() then
+			updateScrapBeacons()
+		end
 	end)
 end
 
@@ -327,6 +371,7 @@ local function setupMapListeners(force)
 	updateScrapBeacons()
 
 	table.insert(mapListenerConns, mapFolder.DescendantAdded:Connect(function(obj)
+		if not isInstanceAlive() then return end
 		if obj.Name == "DebrisPiece" then
 			local pos = getItemPosition(obj)
 			if pos then
@@ -334,7 +379,7 @@ local function setupMapListeners(force)
 				scheduleScrapUpdate()
 			else
 				task.delay(0.1, function()
-					if obj:IsDescendantOf(workspace) then
+					if isInstanceAlive() and obj:IsDescendantOf(workspace) then
 						local p = getItemPosition(obj)
 						if p then
 							scrapPieces[obj] = p
@@ -347,11 +392,12 @@ local function setupMapListeners(force)
 	end))
 
 	table.insert(mapListenerConns, mapFolder.DescendantRemoving:Connect(function(obj)
+		if not isInstanceAlive() then return end
 		if obj.Name == "DebrisPiece" and scrapPieces[obj] then
 			scrapPieces[obj] = nil
 			scheduleScrapUpdate()
 			task.delay(0.15, function()
-				if activeTab and activeTab.name == "Scrap Barges" and activeTab.rebuild then
+				if isInstanceAlive() and activeTab and activeTab.name == "Scrap Barges" and activeTab.rebuild then
 					activeTab.rebuild()
 				end
 			end)
@@ -371,6 +417,11 @@ end
 
 task.spawn(function()
 	while true do
+		if not isInstanceAlive() then
+			for _, c in ipairs(mapListenerConns) do c:Disconnect() end
+			mapListenerConns = {}
+			return
+		end
 		setupMapListeners(false)
 		rescanScrapPieces()
 		updateScrapBeacons()
@@ -420,6 +471,7 @@ end
 
 task.spawn(function()
 	while true do
+		if not isInstanceAlive() then return end
 		scanForCases()
 		task.wait(2)
 	end
@@ -461,7 +513,7 @@ local function getDisplayName(item, tabName)
 	if item.Name == "DebrisPiece" then
 		return "Scrap Barge"
 	end
-	if tabName == "Supplies" then
+	if tabName == "Supplies" or item.Name:match("^BuriedSupplies") then
 		return "Buried Supplies"
 	end
 
@@ -520,9 +572,13 @@ local function collectEntries(container, tabName)
 	if not container then return entries end
 
 	if tabName == "Supplies" then
-		for _, child in container:GetChildren() do
-			if child.Name:match("^BuriedSupplies") then
-				table.insert(entries, child)
+		local seen = {}
+		for _, desc in ipairs(container:GetDescendants()) do
+			if desc.Name:match("^BuriedSupplies") and (desc:IsA("Model") or desc:IsA("BasePart")) then
+				if not seen[desc] then
+					seen[desc] = true
+					table.insert(entries, desc)
+				end
 			end
 		end
 		return entries
@@ -686,6 +742,7 @@ end
 task.spawn(function()
 	while true do
 		task.wait(1.7)
+		if not isInstanceAlive() then return end
 		for i = #activeMarkers, 1, -1 do
 			local m = activeMarkers[i]
 			if not m.gui or not m.gui.Parent then
@@ -752,13 +809,22 @@ local function teleportToPosition(targetPos, keepAnchored)
 	return teleportToCFrame(CFrame.new(targetPos + Vector3.new(0, 3, 0)), keepAnchored)
 end
 
-local function teleportToItem(item, keepAnchored)
+local function teleportToItem(item, keepAnchored, isBarge)
 	local pos = getItemPosition(item)
 	if not pos then return false, "Item has no position." end
+	if isBarge then
+		local char = LocalPlayer.Character
+		local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+		local refPos = hrp and hrp.Position or (pos + Vector3.new(0, 0, 5))
+		local standCF = getBargeStandCFrame(pos, refPos)
+		ensureBargePlatform(standCF.Position)
+		return teleportToCFrame(standCF, keepAnchored)
+	end
 	return teleportToPosition(pos, keepAnchored)
 end
 
 local function returnToSaved()
+	removeBargePlatform()
 	if not savedPosition then return false, "No saved position." end
 	local char = LocalPlayer.Character
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
@@ -1130,7 +1196,7 @@ title.ZIndex            = 10
 title.Parent            = header
 
 local verLabel = Instance.new("TextLabel")
-verLabel.Text              = "v60"
+verLabel.Text              = "v61"
 verLabel.Font              = Enum.Font.Code
 verLabel.TextSize          = 11
 verLabel.TextColor3        = C_SUB
@@ -1820,13 +1886,14 @@ local function createTweenVisuals(hrp, item, targetPos)
 end
 
 --=====================================================================
--- Auto Collect state (v60)
+-- Auto Collect state (v61)
 --=====================================================================
 local autoCollectState = {
 	running          = false,
 	targets          = {},
 	mode             = "Teleport",
 	collected        = {},
+	skippedUntil     = {},
 	attempts         = {},
 	busy             = false,
 	statusTab        = nil,
@@ -1834,15 +1901,24 @@ local autoCollectState = {
 	delayTime        = 0,
 	cancelMove       = nil,
 	originCFrame     = nil,
-	lockedBarge      = nil,   -- kept for backwards compat, unused
-	lockedBargeCF    = nil,   -- kept for backwards compat, unused
 	returnedToOrigin = false,
 }
+
+local function isItemEligible(item, now)
+	if not item or not item:IsDescendantOf(workspace) then return false end
+	if autoCollectState.collected[item] then return false end
+	local skipExp = autoCollectState.skippedUntil[item]
+	if skipExp and now < skipExp then return false end
+	if skipExp and now >= skipExp then
+		autoCollectState.skippedUntil[item] = nil
+	end
+	return true
+end
 
 --=====================================================================
 -- Proximity prompts + H press stability
 --=====================================================================
-local function triggerPromptsOnItem(targetItem, holdTime)
+local function triggerPromptsOnItem(targetItem)
 	if not targetItem then return end
 	if typeof(fireproximityprompt) ~= "function" then return end
 	for _, desc in ipairs(targetItem:GetDescendants()) do
@@ -1872,7 +1948,7 @@ local function waitUntilStable(maxWait)
 end
 
 --=====================================================================
--- Key simulation (v60 - all methods, no focus gate)
+-- Key simulation (v61 - all methods, no focus gate)
 --=====================================================================
 local function simulateKey(key, holdTime, targetItem, shouldInterrupt)
 	holdTime = holdTime or 0.05
@@ -1958,8 +2034,14 @@ local function getItemsForCategory(catName)
 		local gar = g and g:FindFirstChild("Gardening")
 		local for_ = gar and gar:FindFirstChild("Foraging")
 		if for_ then
-			for _, child in ipairs(for_:GetChildren()) do
-				if child.Name:match("^BuriedSupplies") then table.insert(items, child) end
+			local seen = {}
+			for _, desc in ipairs(for_:GetDescendants()) do
+				if desc.Name:match("^BuriedSupplies") and (desc:IsA("Model") or desc:IsA("BasePart")) then
+					if not seen[desc] then
+						seen[desc] = true
+						table.insert(items, desc)
+					end
+				end
 			end
 		end
 	elseif catName == "Scrap Barges" then
@@ -2074,7 +2156,7 @@ local function getPriorityCache()
 			if prio < bestPrio then
 				local items = getItemsForCategory(targetName)
 				for _, item in ipairs(items) do
-					if not autoCollectState.collected[item] and item:IsDescendantOf(workspace) then
+					if isItemEligible(item, now) then
 						bestPrio = prio
 						bestItem = item
 						bestCat  = targetName
@@ -2111,9 +2193,7 @@ local function interruptibleWait(duration, currentPriority, currentItem)
 end
 
 --=====================================================================
--- Scrap Barge Heavy-Attack (v60)
--- Fire all input paths per attempt. Tabbed-out safe via firesignal.
--- No anchoring, no repinning. Fresh CFrame per attempt.
+-- Scrap Barge Heavy-Attack (v61 + 15x15 invisible platform)
 --=====================================================================
 local function _fireKeypressStr()
 	if typeof(keypress) ~= "function" or typeof(keyrelease) ~= "function" then return end
@@ -2188,6 +2268,10 @@ local function attemptBreakBarge(targetItem, shouldInterrupt)
 
 	local strikeCF = getBargeStandCFrame(bargePos, hrp.Position)
 
+	-- Place 15x15 invisible platform under the player so they don't fall into water/void
+	ensureBargePlatform(strikeCF.Position)
+
+	hrp.Anchored = false
 	hrp.CFrame = strikeCF
 	hrp.AssemblyLinearVelocity = Vector3.zero
 	hrp.AssemblyAngularVelocity = Vector3.zero
@@ -2220,7 +2304,7 @@ local function attemptBreakBarge(targetItem, shouldInterrupt)
 end
 
 --=====================================================================
--- Main auto-collect loop (v60)
+-- Main auto-collect loop (v61)
 --=====================================================================
 local lastLoopFast = false
 
@@ -2234,6 +2318,8 @@ task.spawn(function()
 		end
 
 		local ok, err = pcall(function()
+			local now = os.clock()
+
 			for inst in pairs(autoCollectState.collected) do
 				if not inst:IsDescendantOf(workspace) then
 					autoCollectState.collected[inst] = nil
@@ -2244,23 +2330,33 @@ task.spawn(function()
 					autoCollectState.attempts[inst] = nil
 				end
 			end
+			for inst, exp in pairs(autoCollectState.skippedUntil) do
+				if not inst:IsDescendantOf(workspace) or now >= exp then
+					autoCollectState.skippedUntil[inst] = nil
+				end
+			end
 
 			local char = LocalPlayer.Character
 			local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 			if not hrp then return end
 
 			local available = {}
+			local skippedCount = 0
 			for targetName in pairs(autoCollectState.targets) do
 				local prio = CATEGORY_PRIORITY[targetName] or 2
 				local items = getItemsForCategory(targetName)
 				for _, item in ipairs(items) do
-					if not autoCollectState.collected[item] and item:IsDescendantOf(workspace) then
-						local pos = getItemPosition(item)
-						if pos then
-							table.insert(available, {
-								item = item, pos = pos,
-								catName = targetName, priority = prio,
-							})
+					if item:IsDescendantOf(workspace) and not autoCollectState.collected[item] then
+						if isItemEligible(item, now) then
+							local pos = getItemPosition(item)
+							if pos then
+								table.insert(available, {
+									item = item, pos = pos,
+									catName = targetName, priority = prio,
+								})
+							end
+						else
+							skippedCount += 1
 						end
 					end
 				end
@@ -2268,6 +2364,7 @@ task.spawn(function()
 
 			-- ONE-SHOT return-to-origin while waiting
 			if #available == 0 then
+				removeBargePlatform()
 				if hrp and hrp.Parent then hrp.Anchored = false end
 
 				local origin = autoCollectState.originCFrame
@@ -2287,8 +2384,13 @@ task.spawn(function()
 				end
 
 				if autoCollectState.statusTab and autoCollectState.statusTab.status then
-					autoCollectState.statusTab.status.Text = "Waiting for items..."
-					autoCollectState.statusTab.status.TextColor3 = C_SUB
+					if skippedCount > 0 then
+						autoCollectState.statusTab.status.Text = string.format("Cooling down (%d item(s))...", skippedCount)
+						autoCollectState.statusTab.status.TextColor3 = C_WARN
+					else
+						autoCollectState.statusTab.status.Text = "Waiting for items..."
+						autoCollectState.statusTab.status.TextColor3 = C_SUB
+					end
 				end
 				task.wait(0.25)
 				return
@@ -2329,7 +2431,7 @@ task.spawn(function()
 
 			autoCollectState.busy = true
 
-			-- ===== SCRAP BARGE (v60 early-return handler) =====
+			-- ===== SCRAP BARGE (v61 early-return handler) =====
 			if isScrapBarge then
 				if autoCollectState.statusTab and autoCollectState.statusTab.status then
 					autoCollectState.statusTab.status.Text = string.format("Barge %s: attempting (%d/%d)",
@@ -2346,6 +2448,7 @@ task.spawn(function()
 				if broke then
 					autoCollectState.collected[targetItem] = true
 					autoCollectState.attempts[targetItem]  = nil
+					autoCollectState.skippedUntil[targetItem] = nil
 					scrapPieces[targetItem] = nil
 					scheduleScrapUpdate()
 					if autoCollectState.statusTab and autoCollectState.statusTab.status then
@@ -2357,6 +2460,7 @@ task.spawn(function()
 				end
 
 				if reason == "preempt" then
+					removeBargePlatform()
 					autoCollectState.busy = false
 					if autoCollectState.statusTab and autoCollectState.statusTab.status then
 						autoCollectState.statusTab.status.Text = "Barge preempted for higher priority"
@@ -2366,6 +2470,7 @@ task.spawn(function()
 				end
 
 				if reason == "stopped" or reason == "no-hrp" or reason == "no-pos" then
+					removeBargePlatform()
 					autoCollectState.busy = false
 					return
 				end
@@ -2375,10 +2480,12 @@ task.spawn(function()
 				autoCollectState.attempts[targetItem] = nextAtt
 
 				if nextAtt.count >= COLLECT_MAX_TRIES then
-					autoCollectState.collected[targetItem] = true
-					autoCollectState.attempts[targetItem]  = nil
+					-- Cooldown instead of permanent blacklist so it will retry later
+					autoCollectState.skippedUntil[targetItem] = os.clock() + SKIP_COOLDOWN
+					autoCollectState.attempts[targetItem]     = nil
+					removeBargePlatform()
 					if autoCollectState.statusTab and autoCollectState.statusTab.status then
-						autoCollectState.statusTab.status.Text = "Gave up on barge after " .. COLLECT_MAX_TRIES .. " tries"
+						autoCollectState.statusTab.status.Text = "Skipping barge for " .. SKIP_COOLDOWN .. "s..."
 						autoCollectState.statusTab.status.TextColor3 = C_ERR
 					end
 					autoCollectState.busy = false
@@ -2397,13 +2504,16 @@ task.spawn(function()
 			end
 			-- ===== END SCRAP BARGE =====
 
+			-- Non-barge target: remove barge platform if still present
+			removeBargePlatform()
+
 			-- ===== Non-scrap collection =====
 			local distToTarget = (targetData.pos - hrp.Position).Magnitude
 			local moved        = false
 			local preempted    = false
 
-			local retryMoveThreshold = (targetCat == "Buried Supplies") and 2 or 3
-			local shouldMove = (distToTarget > 12) or (retryNum >= retryMoveThreshold)
+			local retryMoveThreshold = (targetCat == "Buried Supplies") and 1 or 3
+			local shouldMove = (distToTarget > 10) or (retryNum >= retryMoveThreshold)
 
 			if shouldMove then
 				if autoCollectState.mode == "Teleport" then
@@ -2444,8 +2554,8 @@ task.spawn(function()
 			end
 
 			if moved and targetItem:IsDescendantOf(workspace) and action then
-				-- Ensure grounded before pressing H for arrows / world events
-				if targetCat == "Spawned Items" or targetCat == "World Events" then
+				-- Ensure grounded before pressing H
+				if targetCat == "Spawned Items" or targetCat == "World Events" or targetCat == "Buried Supplies" then
 					waitUntilStable(0.5)
 				end
 
@@ -2470,9 +2580,9 @@ task.spawn(function()
 					if shouldInterrupt() then preempted = true; break end
 
 					if isFastWorldEvent then
-						triggerPromptsOnItem(targetItem, 0)
+						triggerPromptsOnItem(targetItem)
 					else
-						task.spawn(triggerPromptsOnItem, targetItem, action.holdTime)
+						task.spawn(triggerPromptsOnItem, targetItem)
 					end
 
 					local keyOk, method = simulateKey(action.key, action.holdTime, targetItem, shouldInterrupt)
@@ -2503,6 +2613,7 @@ task.spawn(function()
 			if not targetItem:IsDescendantOf(workspace) then
 				autoCollectState.collected[targetItem] = true
 				autoCollectState.attempts[targetItem]  = nil
+				autoCollectState.skippedUntil[targetItem] = nil
 
 				if isFastWorldEvent then
 					lastLoopFast = true
@@ -2519,9 +2630,11 @@ task.spawn(function()
 				autoCollectState.attempts[targetItem] = nextAtt
 
 				if nextAtt.count >= COLLECT_MAX_TRIES then
-					autoCollectState.collected[targetItem] = true
+					-- Temporary cooldown instead of permanent blacklist
+					autoCollectState.skippedUntil[targetItem] = os.clock() + SKIP_COOLDOWN
+					autoCollectState.attempts[targetItem]     = nil
 					if autoCollectState.statusTab and autoCollectState.statusTab.status then
-						autoCollectState.statusTab.status.Text = "Gave up: " .. name
+						autoCollectState.statusTab.status.Text = string.format("Cooldown (%ds): %s", SKIP_COOLDOWN, name)
 						autoCollectState.statusTab.status.TextColor3 = C_WARN
 					end
 					task.wait(isFastWorldEvent and 0.03 or 0.5)
@@ -2540,8 +2653,7 @@ task.spawn(function()
 		if not ok then
 			warn("[AutoCollect] Recovered from loop error:", err)
 			autoCollectState.busy = false
-			autoCollectState.lockedBarge = nil
-			autoCollectState.lockedBargeCF = nil
+			removeBargePlatform()
 			local c = LocalPlayer.Character
 			local h = c and c:FindFirstChild("HumanoidRootPart")
 			if h then h.Anchored = false end
@@ -2962,6 +3074,9 @@ local function buildAutoCollectBody(tab, parentFrame)
 	local targetOpts = {"Spawned Items", "Buried Supplies", "Scrap Barges", "World Events"}
 	buildMultiDropdown(body, "Target Categories", targetOpts, 14, function(selected)
 		autoCollectState.targets = selected
+		autoCollectState.returnedToOrigin = false
+		priorityCache.lastUpdate = 0
+		priorityCache.prio = math.huge
 	end)
 
 	local modeOpts = {"Teleport", "Tween"}
@@ -3016,10 +3131,9 @@ local function buildAutoCollectBody(tab, parentFrame)
 			end
 
 			autoCollectState.collected        = {}
+			autoCollectState.skippedUntil     = {}
 			autoCollectState.attempts         = {}
 			autoCollectState.busy             = false
-			autoCollectState.lockedBarge      = nil
-			autoCollectState.lockedBargeCF    = nil
 			autoCollectState.cancelMove       = nil
 			autoCollectState.returnedToOrigin = false
 			priorityCache.lastUpdate          = 0
@@ -3037,8 +3151,7 @@ local function buildAutoCollectBody(tab, parentFrame)
 				autoCollectState.cancelMove = nil
 			end
 			clearTweenVisuals()
-			autoCollectState.lockedBarge      = nil
-			autoCollectState.lockedBargeCF    = nil
+			removeBargePlatform()
 			autoCollectState.busy             = false
 			autoCollectState.originCFrame     = nil
 			autoCollectState.returnedToOrigin = false
@@ -3143,6 +3256,7 @@ local function buildSpawnRouteBody(tab, parentFrame)
 		end
 		if autoCollectState.running then
 			autoCollectState.running = false
+			removeBargePlatform()
 			if autoCollectState.statusTab and autoCollectState.statusTab.startBtn then
 				autoCollectState.statusTab.startBtn.Text = "Start Auto Collect"
 				autoCollectState.statusTab.startBtn.BackgroundColor3 = C_ACCENT
@@ -3355,7 +3469,7 @@ local function createManager(tab)
 				tab.status.TextColor3 = C_ERR
 				return
 			end
-			local ok, err = teleportToItem(item)
+			local ok, err = teleportToItem(item, false, tab.name == "Scrap Barges")
 			if ok then
 				tab.status.Text       = "Teleported to: " .. displayName
 				tab.status.TextColor3 = C_OK
