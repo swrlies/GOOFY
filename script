@@ -1,29 +1,33 @@
 --!nocheck
 --=====================================================================
--- Stand Out Dashboard v61 (Madium + Xeno compatible)
---   * Instance de-dup: re-executing kills old instance cleanly
---   * 15x15 invisible platform under player on Scrap Barge teleports
---   * Fixed Auto Collect stalling on "Waiting for items..."
---     (temporary cooldown instead of permanent blacklist + deep scan)
---   * One-shot return-to-origin while waiting
---   * Scrap refresh: full rebuild, change detect, 1s poll
---   * Barge strike: fresh teleport per attempt, platform support,
---     all 4 input paths fired per attempt (tabbed-out safe)
+-- Stand Out Dashboard v63
+--   * Tabbed-out Heavy Swing via PlayerController (token-verified
+--     heavySwing -> beginBasicAttack -> sendCombat -> meleeRemote)
+--   * Tabbed-out Item / Supply / World Event collection via zero-hold
+--     ProximityPrompts, ClickDetectors, and safe interact remote cache
+--   * Single-teleport return to Return position when waiting for items
+--   * 30x30 invisible barge platform that despawns 15s after its tied
+--     barge is broken (works for both Auto Collect & manual teleports)
 --=====================================================================
 
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 --=====================================================================
--- Instance de-duplication (v61)
+-- 1. Instance De-duplication
 --=====================================================================
 local _INSTANCE_ID = tostring(os.time()) .. "_" .. tostring(math.random(1, 1e9))
 _G.StandOut_ActiveID = _INSTANCE_ID
+if type(_G.StandOut_RestoreEco) == "function" then
+	pcall(_G.StandOut_RestoreEco)
+end
 
 local function isInstanceAlive()
 	return _G.StandOut_ActiveID == _INSTANCE_ID
 end
 
 local Players             = game:GetService("Players")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 local RunService          = game:GetService("RunService")
 local UserInputService    = game:GetService("UserInputService")
 local TweenService        = game:GetService("TweenService")
@@ -33,12 +37,13 @@ local LocalPlayer = Players.LocalPlayer
 local Camera      = workspace.CurrentCamera
 local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 
-local TEXT_HZ             = 8
-local COLLECT_MAX_TRIES   = 5
-local COLLECT_RETRY_DELAY = 0.65
-local TELEPORT_SETTLE     = 0.45
-local TWEEN_SETTLE        = 0.3
-local SKIP_COOLDOWN       = 8.0
+local TEXT_HZ                      = 8
+local COLLECT_MAX_TRIES            = 5
+local COLLECT_RETRY_DELAY          = 0.65
+local TELEPORT_SETTLE              = 0.45
+local TWEEN_SETTLE                 = 0.3
+local BARGE_PLATFORM_SIZE          = Vector3.new(30, 1, 30)
+local BARGE_PLATFORM_DESPAWN_DELAY = 15
 
 local CATEGORY_PRIORITY = {
 	["Spawned Items"]   = 1,
@@ -79,6 +84,15 @@ for _, desc in ipairs(workspace:GetDescendants()) do
 		desc:Destroy()
 	end
 end
+
+--=====================================================================
+-- Disable legacy __namecall remote cacher:
+-- Calling Instance methods (:FindFirstChild / :IsDescendantOf) inside __namecall
+-- mutates getnamecallmethod(), causing PlayerController's ServerMeleeAnimSync.Remote
+-- colon calls to throw "Unable to cast value to Object" and strand Swinging = true
+-- (which blocks sprinting even when Auto Collect is turned off).
+--=====================================================================
+_G.StandOut_OnNamecall = nil
 
 --=====================================================================
 -- STATIC COORDINATES
@@ -147,7 +161,7 @@ for _, data in ipairs(STATIC_TELEPORTS) do
 end
 
 --=====================================================================
--- helpers & 15x15 Barge Platform
+-- helpers
 --=====================================================================
 local function getPart(inst)
 	if not inst then return nil end
@@ -167,48 +181,10 @@ local function getItemPosition(item)
 	if item and item:IsA("Model") then
 		local ok, cf = pcall(function() return item:GetPivot() end)
 		if ok and cf then return cf.Position end
-		local okBox, boxCF = pcall(function() return item:GetBoundingBox() end)
-		if okBox and boxCF then return boxCF.Position end
 	end
 	return nil
 end
 
-local bargePlatform = nil
-
-local function removeBargePlatform()
-	if bargePlatform then
-		pcall(function() bargePlatform:Destroy() end)
-		bargePlatform = nil
-	end
-	for _, obj in ipairs(workspace:GetChildren()) do
-		if obj.Name == "SIM_BargePlatform" then
-			obj:Destroy()
-		end
-	end
-end
-
-local function ensureBargePlatform(standPos)
-	if not bargePlatform or not bargePlatform.Parent then
-		removeBargePlatform()
-		local plat = Instance.new("Part")
-		plat.Name = "SIM_BargePlatform"
-		plat.Size = Vector3.new(15, 1, 15)
-		plat.Anchored = true
-		plat.CanCollide = true
-		plat.CanTouch = false
-		plat.CanQuery = false
-		plat.Transparency = 1
-		plat.Material = Enum.Material.SmoothPlastic
-		plat.Parent = workspace
-		bargePlatform = plat
-	end
-	-- Place platform top surface right at the player's feet (~3.5 studs below HRP)
-	bargePlatform.CFrame = CFrame.new(standPos - Vector3.new(0, 3.5, 0))
-	return bargePlatform
-end
-
--- Stand ~2.5 studs back, 1.5 studs up, facing debris.
--- (+1.5 Y puts the swing arc THROUGH the debris, not over it)
 local function getBargeStandCFrame(bargePos, refPos)
 	local flatAway = Vector3.new(refPos.X - bargePos.X, 0, refPos.Z - bargePos.Z)
 	if flatAway.Magnitude < 0.05 then
@@ -216,12 +192,13 @@ local function getBargeStandCFrame(bargePos, refPos)
 	else
 		flatAway = flatAway.Unit
 	end
-	local standPos = bargePos + (flatAway * 2.5) + Vector3.new(0, 1.5, 0)
-	return CFrame.new(standPos, bargePos)
+	local standPos = Vector3.new(bargePos.X, bargePos.Y, bargePos.Z) + (flatAway * 3.5) + Vector3.new(0, 2.0, 0)
+	local lookAt   = Vector3.new(bargePos.X, standPos.Y, bargePos.Z)
+	return CFrame.new(standPos, lookAt)
 end
 
 --=====================================================================
--- Scrap Barges Radar (v61 - full rebuild, change detect, 1s poll)
+-- Scrap Barges Radar
 --=====================================================================
 local scrapBeaconFolder = workspace:FindFirstChild("SIM_ScrapBeacons")
 if scrapBeaconFolder then scrapBeaconFolder:Destroy() end
@@ -297,9 +274,7 @@ local function scheduleScrapUpdate()
 	scrapUpdateScheduled = true
 	task.delay(0.25, function()
 		scrapUpdateScheduled = false
-		if isInstanceAlive() then
-			updateScrapBeacons()
-		end
+		updateScrapBeacons()
 	end)
 end
 
@@ -371,7 +346,6 @@ local function setupMapListeners(force)
 	updateScrapBeacons()
 
 	table.insert(mapListenerConns, mapFolder.DescendantAdded:Connect(function(obj)
-		if not isInstanceAlive() then return end
 		if obj.Name == "DebrisPiece" then
 			local pos = getItemPosition(obj)
 			if pos then
@@ -379,7 +353,7 @@ local function setupMapListeners(force)
 				scheduleScrapUpdate()
 			else
 				task.delay(0.1, function()
-					if isInstanceAlive() and obj:IsDescendantOf(workspace) then
+					if obj:IsDescendantOf(workspace) then
 						local p = getItemPosition(obj)
 						if p then
 							scrapPieces[obj] = p
@@ -392,12 +366,11 @@ local function setupMapListeners(force)
 	end))
 
 	table.insert(mapListenerConns, mapFolder.DescendantRemoving:Connect(function(obj)
-		if not isInstanceAlive() then return end
 		if obj.Name == "DebrisPiece" and scrapPieces[obj] then
 			scrapPieces[obj] = nil
 			scheduleScrapUpdate()
 			task.delay(0.15, function()
-				if isInstanceAlive() and activeTab and activeTab.name == "Scrap Barges" and activeTab.rebuild then
+				if activeTab and activeTab.name == "Scrap Barges" and activeTab.rebuild then
 					activeTab.rebuild()
 				end
 			end)
@@ -417,17 +390,88 @@ end
 
 task.spawn(function()
 	while true do
-		if not isInstanceAlive() then
-			for _, c in ipairs(mapListenerConns) do c:Disconnect() end
-			mapListenerConns = {}
-			return
-		end
+		if not isInstanceAlive() then return end
 		setupMapListeners(false)
 		rescanScrapPieces()
 		updateScrapBeacons()
 		task.wait(1.0)
 	end
 end)
+
+--=====================================================================
+-- Barge 30x30 Invisible Platform (despawns 15s after tied barge breaks)
+--=====================================================================
+local bargePlatforms = {}
+
+local function scheduleBargePlatformDespawn(bargeKey)
+	local entry = bargePlatforms[bargeKey]
+	if not entry or entry.destroying then return end
+	entry.destroying = true
+	task.delay(BARGE_PLATFORM_DESPAWN_DELAY, function()
+		if entry.part and entry.part.Parent then
+			entry.part:Destroy()
+		end
+		if bargePlatforms[bargeKey] == entry then
+			bargePlatforms[bargeKey] = nil
+		end
+	end)
+end
+
+local function isBargeStillAlive(bargeKey, anchorPos)
+	if not bargeKey or not bargeKey:IsDescendantOf(workspace) then
+		return false
+	end
+	if bargeKey.Parent == scrapBeaconFolder then
+		for obj, pos in pairs(scrapPieces) do
+			if obj and obj:IsDescendantOf(workspace) then
+				local livePos = getItemPosition(obj) or pos
+				if (livePos - anchorPos).Magnitude <= 20 then
+					return true
+				end
+			end
+		end
+		return false
+	end
+	return true
+end
+
+local function ensureBargePlatform(bargeKey, standPos)
+	if not bargeKey or not standPos then return nil end
+
+	local targetPos = Vector3.new(standPos.X, standPos.Y - 3.5, standPos.Z)
+	local existing = bargePlatforms[bargeKey]
+	if existing and existing.part and existing.part.Parent and not existing.destroying then
+		existing.part.Position = targetPos
+		return existing.part
+	end
+
+	local plat = Instance.new("Part")
+	plat.Name = "SIM_BargePlatform"
+	plat.Size = BARGE_PLATFORM_SIZE
+	plat.Position = targetPos
+	plat.Anchored = true
+	plat.CanCollide = true
+	plat.Transparency = 1
+	plat.TopSurface = Enum.SurfaceType.Smooth
+	plat.BottomSurface = Enum.SurfaceType.Smooth
+	plat.Parent = workspace
+
+	local entry = { part = plat, destroying = false }
+	bargePlatforms[bargeKey] = entry
+
+	local anchorPos = getItemPosition(bargeKey) or standPos
+	task.spawn(function()
+		while isInstanceAlive() and not entry.destroying do
+			if not isBargeStillAlive(bargeKey, anchorPos) then
+				scheduleBargePlatformDespawn(bargeKey)
+				return
+			end
+			task.wait(0.5)
+		end
+	end)
+
+	return plat
+end
 
 --=====================================================================
 -- Passive Case Radar
@@ -506,22 +550,12 @@ local function getDisplayName(item, tabName)
 	if tabName == "Cases" or tabName == "Teleports" or tabName == "Scrap Barges" then
 		return item.Name
 	end
-
-	if item.Name == "Handle" or item.Name == "SeedCorner" then
-		return "Buried Supplies"
-	end
-	if item.Name == "DebrisPiece" then
-		return "Scrap Barge"
-	end
-	if tabName == "Supplies" or item.Name:match("^BuriedSupplies") then
-		return "Buried Supplies"
-	end
-
+	if item.Name == "Handle" or item.Name == "SeedCorner" then return "Buried Supplies" end
+	if item.Name == "DebrisPiece" then return "Scrap Barge" end
+	if tabName == "Supplies" then return "Buried Supplies" end
 	if not item:IsA("Model") then return item.Name end
 	local pp = item.PrimaryPart
-	if pp and pp.Name ~= item.Name and pp.Name ~= "Handle" then
-		return pp.Name
-	end
+	if pp and pp.Name ~= item.Name and pp.Name ~= "Handle" then return pp.Name end
 	local candidates = {}
 	for _, child in item:GetChildren() do
 		if child:IsA("Model") then
@@ -537,7 +571,7 @@ local function getDisplayName(item, tabName)
 end
 
 --=====================================================================
--- ANTI-FAKE (real arrow detection)
+-- ANTI-FAKE
 --=====================================================================
 local function isValidItem(item, tabName)
 	if tabName ~= "Items" then return true end
@@ -572,13 +606,9 @@ local function collectEntries(container, tabName)
 	if not container then return entries end
 
 	if tabName == "Supplies" then
-		local seen = {}
-		for _, desc in ipairs(container:GetDescendants()) do
-			if desc.Name:match("^BuriedSupplies") and (desc:IsA("Model") or desc:IsA("BasePart")) then
-				if not seen[desc] then
-					seen[desc] = true
-					table.insert(entries, desc)
-				end
+		for _, child in container:GetChildren() do
+			if child.Name:match("^BuriedSupplies") then
+				table.insert(entries, child)
 			end
 		end
 		return entries
@@ -809,22 +839,13 @@ local function teleportToPosition(targetPos, keepAnchored)
 	return teleportToCFrame(CFrame.new(targetPos + Vector3.new(0, 3, 0)), keepAnchored)
 end
 
-local function teleportToItem(item, keepAnchored, isBarge)
+local function teleportToItem(item, keepAnchored)
 	local pos = getItemPosition(item)
 	if not pos then return false, "Item has no position." end
-	if isBarge then
-		local char = LocalPlayer.Character
-		local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-		local refPos = hrp and hrp.Position or (pos + Vector3.new(0, 0, 5))
-		local standCF = getBargeStandCFrame(pos, refPos)
-		ensureBargePlatform(standCF.Position)
-		return teleportToCFrame(standCF, keepAnchored)
-	end
 	return teleportToPosition(pos, keepAnchored)
 end
 
 local function returnToSaved()
-	removeBargePlatform()
 	if not savedPosition then return false, "No saved position." end
 	local char = LocalPlayer.Character
 	local hrp  = char and char:FindFirstChild("HumanoidRootPart")
@@ -1196,7 +1217,7 @@ title.ZIndex            = 10
 title.Parent            = header
 
 local verLabel = Instance.new("TextLabel")
-verLabel.Text              = "v61"
+verLabel.Text              = "v63"
 verLabel.Font              = Enum.Font.Code
 verLabel.TextSize          = 11
 verLabel.TextColor3        = C_SUB
@@ -1886,14 +1907,13 @@ local function createTweenVisuals(hrp, item, targetPos)
 end
 
 --=====================================================================
--- Auto Collect state (v61)
+-- Auto Collect state
 --=====================================================================
 local autoCollectState = {
 	running          = false,
 	targets          = {},
 	mode             = "Teleport",
 	collected        = {},
-	skippedUntil     = {},
 	attempts         = {},
 	busy             = false,
 	statusTab        = nil,
@@ -1901,31 +1921,167 @@ local autoCollectState = {
 	delayTime        = 0,
 	cancelMove       = nil,
 	originCFrame     = nil,
+	lockedBarge      = nil,
+	lockedBargeCF    = nil,
 	returnedToOrigin = false,
 }
 
-local function isItemEligible(item, now)
-	if not item or not item:IsDescendantOf(workspace) then return false end
-	if autoCollectState.collected[item] then return false end
-	local skipExp = autoCollectState.skippedUntil[item]
-	if skipExp and now < skipExp then return false end
-	if skipExp and now >= skipExp then
-		autoCollectState.skippedUntil[item] = nil
+--=====================================================================
+-- Tabbed-Out Safe Interact: Prompts + ClickDetectors + Remotes
+--=====================================================================
+local function isItemCollectedState(targetItem)
+	if not targetItem or not targetItem:IsDescendantOf(workspace) then
+		return true
 	end
-	return true
+	if targetItem:GetAttribute("GardenSupplyAvailable") == false then
+		return true
+	end
+	return false
 end
 
---=====================================================================
--- Proximity prompts + H press stability
---=====================================================================
-local function triggerPromptsOnItem(targetItem)
-	if not targetItem then return end
-	if typeof(fireproximityprompt) ~= "function" then return end
-	for _, desc in ipairs(targetItem:GetDescendants()) do
-		if desc:IsA("ProximityPrompt") and desc.Enabled then
-			pcall(fireproximityprompt, desc)
+local function fireInstantPrompt(prompt)
+	if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return false end
+	local fired = false
+	if typeof(fireproximityprompt) == "function" then
+		if pcall(function() return fireproximityprompt(prompt) end) then fired = true end
+	end
+	pcall(function()
+		prompt:InputHoldBegin()
+		task.wait(0.03)
+		prompt:InputHoldEnd()
+		fired = true
+	end)
+	return fired
+end
+
+local function fireHoldPrompt(prompt, targetItem, shouldInterrupt)
+	if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return false end
+
+	-- Preserve HoldDuration so the server's hold-duration check accepts the trigger;
+	-- disable RequiresLineOfSight temporarily so camera angle/tab-out never hides the prompt.
+	local origLoS = prompt.RequiresLineOfSight
+	pcall(function() prompt.RequiresLineOfSight = false end)
+
+	local promptTriggered = false
+	local c1 = prompt.Triggered:Connect(function()
+		promptTriggered = true
+	end)
+	local c2 = ProximityPromptService.PromptTriggered:Connect(function(pr)
+		if pr == prompt then
+			promptTriggered = true
+		end
+	end)
+
+	local beganOk = pcall(function()
+		prompt:InputHoldBegin()
+	end)
+
+	if beganOk then
+		-- Tabbed-out / throttled clients can advance prompt hold progress slower than real time
+		local maxWait = math.max((prompt.HoldDuration or 1.2) * 3.5 + 1.5, 4.5)
+		local t0 = os.clock()
+		while not promptTriggered and (os.clock() - t0 < maxWait) do
+			if not autoCollectState.running then break end
+			if shouldInterrupt and shouldInterrupt() then break end
+			if isItemCollectedState(targetItem) then break end
+			if not prompt.Parent or not prompt.Enabled then break end
+			task.wait(0.05)
+		end
+		pcall(function() prompt:InputHoldEnd() end)
+	end
+
+	c1:Disconnect()
+	c2:Disconnect()
+	pcall(function() prompt.RequiresLineOfSight = origLoS end)
+
+	if promptTriggered and targetItem then
+		local tSettle = os.clock()
+		while not isItemCollectedState(targetItem) and (os.clock() - tSettle < 0.6) do
+			if not autoCollectState.running then break end
+			task.wait(0.05)
 		end
 	end
+
+	if not beganOk and typeof(fireproximityprompt) == "function" then
+		pcall(function() return fireproximityprompt(prompt) end)
+		return true
+	end
+	return promptTriggered or isItemCollectedState(targetItem)
+end
+
+local function fireSinglePromptZeroHold(prompt, targetItem, shouldInterrupt)
+	if not prompt or not prompt:IsA("ProximityPrompt") or not prompt.Enabled then return false end
+	if (prompt.HoldDuration or 0) > 0.05 then
+		return fireHoldPrompt(prompt, targetItem, shouldInterrupt)
+	end
+	return fireInstantPrompt(prompt)
+end
+
+local function triggerInteractOnItem(targetItem, shouldInterrupt)
+	if not targetItem then return false end
+	if isItemCollectedState(targetItem) then return true end
+	local triggered = false
+
+	-- 1. Check targetItem itself & all descendants for ProximityPrompt / ClickDetector
+	local candidates = { targetItem }
+	for _, desc in ipairs(targetItem:GetDescendants()) do
+		table.insert(candidates, desc)
+	end
+
+	for _, inst in ipairs(candidates) do
+		if isItemCollectedState(targetItem) then break end
+		if inst:IsA("ProximityPrompt") and inst.Enabled then
+			if fireSinglePromptZeroHold(inst, targetItem, shouldInterrupt) then
+				triggered = true
+			end
+		elseif inst:IsA("ClickDetector") and typeof(fireclickdetector) == "function" then
+			if pcall(fireclickdetector, inst) then
+				triggered = true
+			end
+		end
+	end
+
+	-- 2. Also check any enabled ProximityPrompt within 12 studs of the item
+	if not isItemCollectedState(targetItem) then
+		local itemPos = getItemPosition(targetItem)
+		if itemPos then
+			local g = workspace:FindFirstChild("Game")
+			if g then
+				for _, desc in ipairs(g:GetDescendants()) do
+					if isItemCollectedState(targetItem) then break end
+					if desc:IsA("ProximityPrompt") and desc.Enabled then
+						local p = desc.Parent and getPart(desc.Parent)
+						if p and (p.Position - itemPos).Magnitude <= 12 then
+							if fireSinglePromptZeroHold(desc, targetItem, shouldInterrupt) then
+								triggered = true
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- 3. Replay cached pickup/interact remote if captured (dot-syntax avoids __namecall issues)
+	if not isItemCollectedState(targetItem) and _G.StandOut_CachedInteract and _G.StandOut_CachedInteractArgs then
+		local rem = _G.StandOut_CachedInteract
+		local argsCopy = table.clone(_G.StandOut_CachedInteractArgs)
+		for i = 1, #argsCopy do
+			if typeof(argsCopy[i]) == "Instance" then
+				argsCopy[i] = targetItem
+			end
+		end
+		local ok = pcall(function()
+			if _G.StandOut_CachedInteractMethod == "InvokeServer" then
+				rem.InvokeServer(rem, table.unpack(argsCopy))
+			else
+				rem.FireServer(rem, table.unpack(argsCopy))
+			end
+		end)
+		if ok then triggered = true end
+	end
+
+	return triggered
 end
 
 local function waitUntilStable(maxWait)
@@ -1948,9 +2104,13 @@ local function waitUntilStable(maxWait)
 end
 
 --=====================================================================
--- Key simulation (v61 - all methods, no focus gate)
+-- Key simulation (only used when window is focused as a backup)
 --=====================================================================
 local function simulateKey(key, holdTime, targetItem, shouldInterrupt)
+	if not UserInputService.WindowFocused then
+		return false, "unfocused-skipped"
+	end
+
 	holdTime = holdTime or 0.05
 	local kc = Enum.KeyCode[key]
 	if not kc then return false, "bad-keycode" end
@@ -2005,12 +2165,12 @@ end
 
 local function getCollectAction(item, catName)
 	if catName == "Buried Supplies" then
-		return {key = "H", holdTime = 1.3, multiHolds = 2, hint = "Holding H for supplies..."}
+		return {key = "H", holdTime = 1.3, multiHolds = 2, hint = "Collecting supplies..."}
 	elseif catName == "Scrap Barges" then
 		return {key = "R", holdTime = 0.08, multiHolds = 1}
 	elseif catName == "World Events" then
 		if isPileOfMoney(item) then
-			return {key = "H", holdTime = 15.0, multiHolds = 1, isMoneyPile = true, hint = "Holding H (15s) for Pile of Money..."}
+			return {key = "H", holdTime = 15.0, multiHolds = 1, isMoneyPile = true, hint = "Collecting Pile of Money..."}
 		else
 			return {key = "H", holdTime = 0.01, multiHolds = 1, fastChain = true}
 		end
@@ -2034,13 +2194,9 @@ local function getItemsForCategory(catName)
 		local gar = g and g:FindFirstChild("Gardening")
 		local for_ = gar and gar:FindFirstChild("Foraging")
 		if for_ then
-			local seen = {}
-			for _, desc in ipairs(for_:GetDescendants()) do
-				if desc.Name:match("^BuriedSupplies") and (desc:IsA("Model") or desc:IsA("BasePart")) then
-					if not seen[desc] then
-						seen[desc] = true
-						table.insert(items, desc)
-					end
+			for _, child in ipairs(for_:GetChildren()) do
+				if child.Name:match("^BuriedSupplies") and child:GetAttribute("GardenSupplyAvailable") ~= false then
+					table.insert(items, child)
 				end
 			end
 		end
@@ -2119,7 +2275,7 @@ local function moveToCFrame(endCF, visualItem, visualPos, keepAnchoredOnArrive, 
 		hrp.AssemblyAngularVelocity = Vector3.zero
 	end
 	if onComplete then onComplete(not cancelled) end
-	return true
+	return not cancelled
 end
 
 local function moveToItem(item, onComplete)
@@ -2156,7 +2312,7 @@ local function getPriorityCache()
 			if prio < bestPrio then
 				local items = getItemsForCategory(targetName)
 				for _, item in ipairs(items) do
-					if isItemEligible(item, now) then
+					if not autoCollectState.collected[item] and item:IsDescendantOf(workspace) then
 						bestPrio = prio
 						bestItem = item
 						bestCat  = targetName
@@ -2193,8 +2349,115 @@ local function interruptibleWait(duration, currentPriority, currentItem)
 end
 
 --=====================================================================
--- Scrap Barge Heavy-Attack (v61 + 15x15 invisible platform)
+-- Scrap Barge Heavy-Attack (Tabbed-Out Safe via PlayerController + ServerMelee Remote)
 --=====================================================================
+local cachedController = nil
+local cachedInternalState = nil
+local cachedControllerChar = nil
+
+_G.StandOut_OnSendCombat = function(actionName, ...)
+	if actionName == "ServerMelee" then
+		local payload = select(1, ...)
+		if type(payload) == "table" and payload.Heavy == true then
+			_G.StandOut_CachedServerMeleePayload = payload
+			_G.StandOut_CachedServerMeleeChar = select(2, ...)
+			_G.StandOut_LastServerMeleeAt = os.clock()
+		end
+	end
+end
+
+local function extractInternalState(pc)
+	if type(pc) ~= "table" or typeof(debug) ~= "table" or type(debug.getupvalues) ~= "function" then
+		return nil
+	end
+	for _, fnName in ipairs({"beginBasicAttack", "startServerMelee", "finishBasicAttack", "heavySwing"}) do
+		local fn = rawget(pc, fnName)
+		if type(fn) == "function" then
+			local okUp, ups = pcall(debug.getupvalues, fn)
+			if okUp and type(ups) == "table" then
+				for _, v in pairs(ups) do
+					if type(v) == "table" and type(rawget(v, "sendCombat")) == "function" then
+						return v
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local function getMeleeRemote(u69)
+	if u69 and type(rawget(u69, "meleeRemote")) == "function" then
+		local ok, mr = pcall(u69.meleeRemote)
+		if ok and mr and typeof(mr) == "Instance" then
+			_G.StandOut_KnownMeleeRemote = mr
+			return mr
+		end
+	end
+	if workspace:GetAttribute("ServerMelee") == true then
+		local mods = ReplicatedStorage:FindFirstChild("Modules")
+		local smas = mods and mods:FindFirstChild("ServerMeleeAnimSync")
+		local rem = smas and smas:FindFirstChild("Remote")
+		if rem and rem:IsA("RemoteEvent") then
+			_G.StandOut_KnownMeleeRemote = rem
+			return rem
+		end
+	end
+	local rems = ReplicatedStorage:FindFirstChild("Remotes")
+	local combat = rems and rems:FindFirstChild("Combat")
+	if combat and (combat:IsA("RemoteEvent") or combat:IsA("UnreliableRemoteEvent")) then
+		return combat
+	end
+	return _G.StandOut_KnownMeleeRemote or _G.StandOut_CachedMelee
+end
+
+local function getPlayerController()
+	local char = LocalPlayer.Character
+	if not char then return nil, nil end
+
+	if cachedController and cachedControllerChar == char then
+		local okFn, hs = pcall(function() return cachedController.heavySwing end)
+		local disposed = cachedInternalState and rawget(cachedInternalState, "disposed") == true
+		if okFn and type(hs) == "function" and not disposed then
+			getMeleeRemote(cachedInternalState)
+			return cachedController, cachedInternalState
+		end
+		cachedController = nil
+		cachedInternalState = nil
+		cachedControllerChar = nil
+	end
+
+	local core = char:FindFirstChild("Core")
+	local pcMod = core and core:FindFirstChild("PlayerController")
+	if not pcMod then return nil, nil end
+
+	local okReq, pc = pcall(require, pcMod)
+	if not okReq or type(pc) ~= "table" or type(rawget(pc, "heavySwing")) ~= "function" then
+		return nil, nil
+	end
+
+	local u69 = extractInternalState(pc)
+	if u69 and not rawget(u69, "_standOutSendCombatWrapped") then
+		local origSend = rawget(u69, "sendCombat")
+		if type(origSend) == "function" then
+			rawset(u69, "_standOutSendCombatWrapped", true)
+			rawset(u69, "sendCombat", function(a1, ...)
+				local cb = _G.StandOut_OnSendCombat
+				if type(cb) == "function" then
+					pcall(cb, a1, ...)
+				end
+				return origSend(a1, ...)
+			end)
+		end
+	end
+
+	cachedController = pc
+	cachedInternalState = u69
+	cachedControllerChar = char
+	getMeleeRemote(u69)
+	return pc, u69
+end
+
 local function _fireKeypressStr()
 	if typeof(keypress) ~= "function" or typeof(keyrelease) ~= "function" then return end
 	pcall(function()
@@ -2256,8 +2519,370 @@ local function pressAllMethods()
 	_fireKeypressNum()
 end
 
+local lastBargeSwingAt = 0
+
+local function extractStateFlags(pc)
+	if type(pc) ~= "table" or typeof(debug) ~= "table" or type(debug.getupvalues) ~= "function" then
+		return nil
+	end
+	for _, fnName in ipairs({"heavySwing", "beginBasicAttack", "getStates"}) do
+		local fn = rawget(pc, fnName)
+		if type(fn) == "function" then
+			local okUp, ups = pcall(debug.getupvalues, fn)
+			if okUp and type(ups) == "table" then
+				for _, v in pairs(ups) do
+					if type(v) == "table" and rawget(v, "Summoned") ~= nil and rawget(v, "Swinging") ~= nil then
+						return v
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local function resetStuckCombatStates(pc, u69)
+	local pend = u69 and rawget(u69, "serverMeleePending")
+	if pend and pend.Answer == nil and (os.clock() - lastBargeSwingAt) < 1.5 then
+		return
+	end
+	local u10 = extractStateFlags(pc)
+	local wasStuck = false
+	if u10 then
+		wasStuck = (u10.Swinging == true or u10.HeavySwinging == true or u10.SwingCooldown == true or u10.HeavyCD == true)
+		u10.Swinging = false
+		u10.SwingCooldown = false
+		u10.HeavySwinging = false
+		u10.HeavyCD = false
+		u10.HitEnabled = false
+		u10.HeavyHit = false
+	end
+	if wasStuck and not wsEnabled then
+		local char = LocalPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			if pc and type(rawget(pc, "getGroundWalkSpeed")) == "function" then
+				local okG, gws = pcall(function() return pc:getGroundWalkSpeed(true) end)
+				if okG and type(gws) == "number" and hum.WalkSpeed < gws then
+					hum.WalkSpeed = gws
+				end
+			elseif hum.WalkSpeed < 14 then
+				hum.WalkSpeed = 16
+			end
+			if hum.JumpPower == 0 then
+				local data = LocalPlayer:FindFirstChild("Data")
+				local dj = data and data:FindFirstChild("DefaultJump")
+				hum.JumpPower = (dj and type(dj.Value) == "number") and dj.Value or 50
+			end
+		end
+	end
+end
+
+-- Recover immediately if an earlier session left swing/walkspeed state stuck
+task.defer(function()
+	local initCtrl, initU69 = getPlayerController()
+	if initCtrl then
+		resetStuckCombatStates(initCtrl, initU69)
+	end
+end)
+
+local function getEquippedStandName()
+	local data = LocalPlayer:FindFirstChild("Data")
+	if not data then return "" end
+	local ov = data:FindFirstChild("StandOverride")
+	if ov and type(ov.Value) == "string" and ov.Value ~= "" then
+		return ov.Value
+	end
+	local st = data:FindFirstChild("Stand")
+	return (st and type(st.Value) == "string") and st.Value or ""
+end
+
+local function getStandActorModel()
+	local g = workspace:FindFirstChild("Game")
+	local stands = g and g:FindFirstChild("Stands")
+	local val = stands and stands:FindFirstChild(LocalPlayer.Name)
+	return (val and val:IsA("ObjectValue")) and val.Value or nil
+end
+
+local function ensureStandReadyForBarge(char, hrp)
+	local standName = getEquippedStandName()
+	if standName == "" then return false, nil end
+
+	local rems = ReplicatedStorage:FindFirstChild("Remotes")
+	local combatRemote = rems and rems:FindFirstChild("Combat")
+	local standObj = getStandActorModel()
+
+	if char:GetAttribute("Summoned") == true and standObj and hrp then
+		local sHrp = standObj:FindFirstChild("HumanoidRootPart")
+		if sHrp and (sHrp.Position - hrp.Position).Magnitude > 30 then
+			local tWait = os.clock()
+			while (sHrp.Position - hrp.Position).Magnitude > 30 and os.clock() - tWait < 0.35 do
+				task.wait(0.05)
+			end
+			if (sHrp.Position - hrp.Position).Magnitude > 30 and combatRemote and combatRemote:IsA("RemoteEvent") then
+				pcall(function() combatRemote.FireServer(combatRemote, "Summon", false) end)
+				task.wait(0.25)
+			end
+		end
+	end
+
+	if char:GetAttribute("Summoned") ~= true and combatRemote and combatRemote:IsA("RemoteEvent") then
+		pcall(function() combatRemote.FireServer(combatRemote, "Summon", true) end)
+		local t0 = os.clock()
+		while char:GetAttribute("Summoned") ~= true and os.clock() - t0 < 1.2 do
+			task.wait(0.05)
+		end
+		task.wait(0.2)
+	end
+
+	standObj = getStandActorModel()
+	return (char:GetAttribute("Summoned") == true), standObj
+end
+
+local function buildDynamicHeavyPayload(char, token, standObj)
+	local standName = getEquippedStandName()
+	local data = LocalPlayer:FindFirstChild("Data")
+	local wov = data and data:FindFirstChild("WeaponOverride")
+	local wv  = data and data:FindFirstChild("Weapon")
+	local weaponName = (wov and wov.Value ~= "" and wov.Value) or (wv and wv.Value ~= "" and wv.Value) or "Fists"
+
+	local mods = ReplicatedStorage:FindFirstChild("Modules")
+	local okW, Weapons = pcall(require, mods and mods:FindFirstChild("Weapons"))
+	local okS, Stands  = pcall(require, mods and mods:FindFirstChild("Stands"))
+	local okU, Utility = pcall(require, mods and mods:FindFirstChild("Utility"))
+
+	local sDef = (okS and type(Stands) == "table" and standName ~= "" and Stands.GetDefinition)
+		and Stands:GetDefinition(char, standName) or nil
+	local combatName = (okW and type(Weapons) == "table" and sDef and Weapons.GetStandCombatName)
+		and Weapons:GetStandCombatName(standName, sDef) or weaponName
+	local animName = (okW and type(Weapons) == "table" and sDef and Weapons.GetStandAnimationName)
+		and Weapons:GetStandAnimationName(standName, sDef) or combatName
+
+	local wInfo = (okW and type(Weapons) == "table" and type(Weapons.weaponInfo) == "table")
+		and Weapons.weaponInfo[combatName] or nil
+	local useStand = (standName ~= "" and char:GetAttribute("Summoned") == true and sDef ~= nil
+		and not sDef.NoStandM1 and not (wInfo and wInfo.HeavyOnCharacter))
+
+	local profile = useStand and combatName or weaponName
+	local pInfo = (okW and type(Weapons) == "table" and type(Weapons.weaponInfo) == "table")
+		and (Weapons.weaponInfo[profile] or Weapons.weaponInfo.Fists) or nil
+
+	local mult = 1
+	if okU and type(Utility) == "table" and type(Utility.getAttackTimeMultiplier) == "function" then
+		local okM, m = pcall(Utility.getAttackTimeMultiplier, Utility, char, nil, nil, {
+			BasicAttack = "Heavy",
+			BasicAttackProfile = profile,
+			BasicAttackOnCharacter = (pInfo and pInfo.HeavyOnCharacter == true) or false,
+		})
+		if okM and type(m) == "number" and m > 0 then mult = m end
+	end
+
+	local activeTimes = pInfo and pInfo.HeavySwingActiveTimes and pInfo.HeavySwingActiveTimes[1]
+	local at1  = ((activeTimes and activeTimes[1]) or 0.375) * mult
+	local len1 = ((activeTimes and activeTimes[2]) or 0.2) * mult
+	local speed1 = (pInfo and pInfo.HeavyAnimationSpeed and pInfo.HeavyAnimationSpeed[1]) or 1
+	local size1 = (pInfo and pInfo.M2Hitbox and pInfo.M2Hitbox[1]) or Vector3.new(8, 6.65, 8.8)
+	local offset1 = (pInfo and pInfo.HeavyOffset) or CFrame.new(0, 0, -size1.Z / 2)
+
+	local animObj
+	local assets = ReplicatedStorage:FindFirstChild("Assets")
+	local anims = assets and assets:FindFirstChild("Animations")
+	if anims then
+		local folder = anims:FindFirstChild(animName) or anims:FindFirstChild(profile) or anims:FindFirstChild("Fists")
+		local heavyFolder = folder and folder:FindFirstChild("Heavy")
+		animObj = heavyFolder and heavyFolder:FindFirstChild("1")
+	end
+	local actorModel = useStand and (standObj or getStandActorModel()) or char
+
+	local contacts = {}
+	local eventTimes = pInfo and pInfo.HeavyHitEventTimes and pInfo.HeavyHitEventTimes[1]
+	if type(eventTimes) == "table" and #eventTimes > 0 then
+		for idx, tVal in ipairs(eventTimes) do
+			local isLast = (idx == #eventTimes)
+			table.insert(contacts, {
+				At = tVal * mult,
+				Length = len1,
+				Swing = { Iteration = 1, HeavyHit = true, Length = 0.6, Finisher = isLast },
+				Hit = {
+					SwingIteration = 1,
+					HeavyIteration = 1,
+					HeavyHit = isLast,
+					AirBody = false,
+					AirStand = false,
+					Uptilt = false,
+				},
+			})
+		end
+	else
+		table.insert(contacts, {
+			At = at1,
+			Length = len1,
+			Swing = { Iteration = 1, HeavyHit = true, Length = 0.6, Finisher = true },
+			Hit = {
+				SwingIteration = 1,
+				HeavyIteration = 1,
+				HeavyHit = true,
+				AirBody = false,
+				AirStand = false,
+				Uptilt = false,
+			},
+		})
+	end
+
+	local animTbl
+	if animObj and actorModel then
+		animTbl = {
+			Actor = actorModel,
+			Id = animObj.AnimationId,
+			Speed = speed1 / mult,
+			Step = (useStand and sDef and sDef.HeavyAttackMovementLead) and sDef.HeavyAttackOffset or nil,
+		}
+	end
+
+	return {
+		Heavy = true,
+		Size = size1,
+		Offset = offset1,
+		Profile = profile,
+		ActorStand = useStand,
+		Chained = false,
+		Anim = animTbl,
+		Contacts = contacts,
+		Token = token,
+	}
+end
+
+local function fireDirectServerMeleeRemote(ctrl, u69)
+	local char = LocalPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not char or not hrp then return nil end
+
+	local remote = getMeleeRemote(u69)
+	if not remote then return nil end
+
+	resetStuckCombatStates(ctrl, u69)
+	local _, standObj = ensureStandReadyForBarge(char, hrp)
+
+	local isJob = (remote.Name == "Remote") or (workspace:GetAttribute("ServerMelee") == true)
+	local nextToken = ((u69 and rawget(u69, "serverMeleeToken")) or _G.StandOut_LastToken or 0) + 1
+	_G.StandOut_LastToken = nextToken
+
+	local pend: { [string]: any } = { Token = nextToken, Chained = false }
+	if u69 then
+		rawset(u69, "serverMeleeToken", nextToken)
+		rawset(u69, "serverMeleePending", pend)
+	end
+
+	local payload = buildDynamicHeavyPayload(char, nextToken, standObj)
+
+	local finishDelay = 0.95
+	if type(payload.Contacts) == "table" then
+		local maxAt = 0
+		for _, c in ipairs(payload.Contacts) do
+			if type(c) == "table" and type(c.At) == "number" then
+				local endAt = c.At + (tonumber(c.Length) or 0.2)
+				if endAt > maxAt then maxAt = endAt end
+			end
+		end
+		if maxAt > 0 then
+			finishDelay = math.clamp(maxAt + 0.1, 0.55, 2.0)
+		end
+	end
+
+	-- Always invoke FireServer via dot syntax so __namecall hooks cannot throw "Unable to cast value to Object"
+	local okFire = pcall(function()
+		if isJob then
+			remote.FireServer(remote, "Job", "BasicAttack", true, true, 1, char)
+			remote.FireServer(remote, "Job", "ServerMelee", payload, char)
+		else
+			remote.FireServer(remote, "BasicAttack", true, true, 1, char)
+			remote.FireServer(remote, "ServerMelee", payload, char)
+		end
+	end)
+
+	if not okFire then return nil end
+	lastBargeSwingAt = os.clock()
+
+	task.delay(finishDelay, function()
+		pcall(function()
+			if isJob then
+				remote.FireServer(remote, "Job", "BasicAttack", false, true)
+			else
+				remote.FireServer(remote, "BasicAttack", false, true)
+			end
+		end)
+	end)
+
+	local waitStart = os.clock()
+	while pend.Answer == nil and os.clock() - waitStart < 0.3 do
+		task.wait(0.02)
+	end
+
+	return "remote-ServerMelee"
+end
+
+local function fireHeavySwing()
+	local ctrl, u69 = getPlayerController()
+	resetStuckCombatStates(ctrl, u69)
+
+	-- 1. Primary: Direct ServerMelee remote dispatch using dot syntax (avoids broken __namecall and stuck client flags)
+	local directMethod = fireDirectServerMeleeRemote(ctrl, u69)
+	if directMethod then
+		return directMethod
+	end
+
+	-- 2. Fallback: PlayerController:heavySwing() if direct remote wasn't found
+	if ctrl then
+		local prevToken = u69 and rawget(u69, "serverMeleeToken")
+		local prevAt = _G.StandOut_LastServerMeleeAt or 0
+
+		task.spawn(function()
+			pcall(function()
+				ctrl:heavySwing()
+			end)
+		end)
+
+		local t0 = os.clock()
+		while os.clock() - t0 < 0.25 do
+			local curToken = u69 and rawget(u69, "serverMeleeToken")
+			if (curToken ~= nil and curToken ~= prevToken)
+				or ((_G.StandOut_LastServerMeleeAt or 0) > prevAt) then
+				lastBargeSwingAt = os.clock()
+				return "heavySwing-remote"
+			end
+			task.wait(0.02)
+		end
+	end
+
+	-- 3. Replay cached melee remote using dot syntax if captured
+	if _G.StandOut_CachedMelee and _G.StandOut_CachedMeleeArgs then
+		local rem = _G.StandOut_CachedMelee
+		local ok = pcall(function()
+			if _G.StandOut_CachedMeleeMethod == "InvokeServer" then
+				rem.InvokeServer(rem, table.unpack(_G.StandOut_CachedMeleeArgs))
+			else
+				rem.FireServer(rem, table.unpack(_G.StandOut_CachedMeleeArgs))
+			end
+		end)
+		if ok then
+			lastBargeSwingAt = os.clock()
+			return "cached-remote"
+		end
+	end
+
+	-- 4. Last resort: Input simulation (only if focused)
+	if UserInputService.WindowFocused then
+		pressAllMethods()
+		lastBargeSwingAt = os.clock()
+		return "input"
+	end
+	return "no-method"
+end
+
 local function attemptBreakBarge(targetItem, shouldInterrupt)
-	local bargePos = getItemPosition(targetItem)
+	local platformTarget = (targetItem.Parent and targetItem.Parent.Name == "ScrapPlatform")
+		and targetItem.Parent or targetItem
+	local bargePos = getItemPosition(platformTarget) or getItemPosition(targetItem)
 	if not bargePos then return false, "no-pos" end
 
 	local char = LocalPlayer.Character
@@ -2268,8 +2893,8 @@ local function attemptBreakBarge(targetItem, shouldInterrupt)
 
 	local strikeCF = getBargeStandCFrame(bargePos, hrp.Position)
 
-	-- Place 15x15 invisible platform under the player so they don't fall into water/void
-	ensureBargePlatform(strikeCF.Position)
+	-- Spawn/update 30x30 invisible platform before landing
+	ensureBargePlatform(targetItem, strikeCF.Position)
 
 	hrp.Anchored = false
 	hrp.CFrame = strikeCF
@@ -2280,31 +2905,53 @@ local function attemptBreakBarge(targetItem, shouldInterrupt)
 		Camera.CFrame = CFrame.new(Camera.CFrame.Position, bargePos)
 	end)
 
-	task.wait(0.15)
+	task.wait(0.2)
 
-	if not autoCollectState.running then return false, "stopped" end
-	if shouldInterrupt and shouldInterrupt() then return false, "preempt" end
-
-	pressAllMethods()
-
-	local waitStart = os.clock()
-	while os.clock() - waitStart < 0.5 do
+	-- Respect heavy swing cooldown cleanly without stalling on stuck client flags
+	local ctrl, u69 = getPlayerController()
+	resetStuckCombatStates(ctrl, u69)
+	while os.clock() - lastBargeSwingAt < 1.25 do
 		if not autoCollectState.running then return false, "stopped" end
 		if shouldInterrupt and shouldInterrupt() then return false, "preempt" end
 		if not targetItem:IsDescendantOf(workspace) then
-			return true, "fired"
+			scheduleBargePlatformDespawn(targetItem)
+			return true, "already-broken"
 		end
 		task.wait(0.05)
 	end
 
-	if not targetItem:IsDescendantOf(workspace) then
-		return true, "fired"
+	if not autoCollectState.running then return false, "stopped" end
+	if shouldInterrupt and shouldInterrupt() then return false, "preempt" end
+
+	-- Re-face barge in case character drifted during settle wait
+	bargePos = getItemPosition(platformTarget) or getItemPosition(targetItem) or bargePos
+	strikeCF = getBargeStandCFrame(bargePos, hrp.Position)
+	hrp.CFrame = strikeCF
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
+
+	local usedMethod = fireHeavySwing()
+
+	local waitStart = os.clock()
+	while os.clock() - waitStart < 1.5 do
+		if not autoCollectState.running then return false, "stopped" end
+		if shouldInterrupt and shouldInterrupt() then return false, "preempt" end
+		if not targetItem:IsDescendantOf(workspace) or not platformTarget:IsDescendantOf(workspace) then
+			scheduleBargePlatformDespawn(targetItem)
+			return true, usedMethod
+		end
+		task.wait(0.05)
+	end
+
+	if not targetItem:IsDescendantOf(workspace) or not platformTarget:IsDescendantOf(workspace) then
+		scheduleBargePlatformDespawn(targetItem)
+		return true, usedMethod
 	end
 	return false, "no-break"
 end
 
 --=====================================================================
--- Main auto-collect loop (v61)
+-- Main auto-collect loop
 --=====================================================================
 local lastLoopFast = false
 
@@ -2318,8 +2965,6 @@ task.spawn(function()
 		end
 
 		local ok, err = pcall(function()
-			local now = os.clock()
-
 			for inst in pairs(autoCollectState.collected) do
 				if not inst:IsDescendantOf(workspace) then
 					autoCollectState.collected[inst] = nil
@@ -2330,74 +2975,59 @@ task.spawn(function()
 					autoCollectState.attempts[inst] = nil
 				end
 			end
-			for inst, exp in pairs(autoCollectState.skippedUntil) do
-				if not inst:IsDescendantOf(workspace) or now >= exp then
-					autoCollectState.skippedUntil[inst] = nil
-				end
-			end
 
 			local char = LocalPlayer.Character
 			local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 			if not hrp then return end
 
 			local available = {}
-			local skippedCount = 0
 			for targetName in pairs(autoCollectState.targets) do
 				local prio = CATEGORY_PRIORITY[targetName] or 2
 				local items = getItemsForCategory(targetName)
 				for _, item in ipairs(items) do
-					if item:IsDescendantOf(workspace) and not autoCollectState.collected[item] then
-						if isItemEligible(item, now) then
-							local pos = getItemPosition(item)
-							if pos then
-								table.insert(available, {
-									item = item, pos = pos,
-									catName = targetName, priority = prio,
-								})
-							end
-						else
-							skippedCount += 1
+					if not autoCollectState.collected[item] and item:IsDescendantOf(workspace) then
+						local pos = getItemPosition(item)
+						if pos then
+							table.insert(available, {
+								item = item, pos = pos,
+								catName = targetName, priority = prio,
+							})
 						end
 					end
 				end
 			end
 
-			-- ONE-SHOT return-to-origin while waiting
 			if #available == 0 then
-				removeBargePlatform()
 				if hrp and hrp.Parent then hrp.Anchored = false end
 
-				local origin = autoCollectState.originCFrame
+				local origin = savedPosition or autoCollectState.originCFrame
 				if origin and hrp and hrp.Parent and not autoCollectState.returnedToOrigin then
 					if (hrp.Position - origin.Position).Magnitude > 15 then
 						if autoCollectState.statusTab and autoCollectState.statusTab.status then
 							autoCollectState.statusTab.status.Text = "Returning to origin..."
 							autoCollectState.statusTab.status.TextColor3 = C_SUB
 						end
+						local returnedOk = false
 						if autoCollectState.mode == "Tween" then
-							moveToCFrame(origin, nil, origin.Position, false)
+							returnedOk = moveToCFrame(origin, nil, origin.Position, false)
 						else
-							teleportToCFrame(origin, false)
+							returnedOk = (teleportToCFrame(origin, false) == true)
 						end
+						if returnedOk then
+							autoCollectState.returnedToOrigin = true
+						end
+					else
+						autoCollectState.returnedToOrigin = true
 					end
-					autoCollectState.returnedToOrigin = true
 				end
 
 				if autoCollectState.statusTab and autoCollectState.statusTab.status then
-					if skippedCount > 0 then
-						autoCollectState.statusTab.status.Text = string.format("Cooling down (%d item(s))...", skippedCount)
-						autoCollectState.statusTab.status.TextColor3 = C_WARN
-					else
-						autoCollectState.statusTab.status.Text = "Waiting for items..."
-						autoCollectState.statusTab.status.TextColor3 = C_SUB
-					end
+					autoCollectState.statusTab.status.Text = "Waiting for items..."
+					autoCollectState.statusTab.status.TextColor3 = C_SUB
 				end
 				task.wait(0.25)
 				return
 			end
-
-			-- Items exist: reset one-shot flag
-			autoCollectState.returnedToOrigin = false
 
 			local ppos = hrp.Position
 			table.sort(available, function(a, b)
@@ -2430,8 +3060,8 @@ task.spawn(function()
 			end
 
 			autoCollectState.busy = true
+			autoCollectState.returnedToOrigin = false
 
-			-- ===== SCRAP BARGE (v61 early-return handler) =====
 			if isScrapBarge then
 				if autoCollectState.statusTab and autoCollectState.statusTab.status then
 					autoCollectState.statusTab.status.Text = string.format("Barge %s: attempting (%d/%d)",
@@ -2448,7 +3078,6 @@ task.spawn(function()
 				if broke then
 					autoCollectState.collected[targetItem] = true
 					autoCollectState.attempts[targetItem]  = nil
-					autoCollectState.skippedUntil[targetItem] = nil
 					scrapPieces[targetItem] = nil
 					scheduleScrapUpdate()
 					if autoCollectState.statusTab and autoCollectState.statusTab.status then
@@ -2460,7 +3089,6 @@ task.spawn(function()
 				end
 
 				if reason == "preempt" then
-					removeBargePlatform()
 					autoCollectState.busy = false
 					if autoCollectState.statusTab and autoCollectState.statusTab.status then
 						autoCollectState.statusTab.status.Text = "Barge preempted for higher priority"
@@ -2470,7 +3098,6 @@ task.spawn(function()
 				end
 
 				if reason == "stopped" or reason == "no-hrp" or reason == "no-pos" then
-					removeBargePlatform()
 					autoCollectState.busy = false
 					return
 				end
@@ -2480,12 +3107,10 @@ task.spawn(function()
 				autoCollectState.attempts[targetItem] = nextAtt
 
 				if nextAtt.count >= COLLECT_MAX_TRIES then
-					-- Cooldown instead of permanent blacklist so it will retry later
-					autoCollectState.skippedUntil[targetItem] = os.clock() + SKIP_COOLDOWN
-					autoCollectState.attempts[targetItem]     = nil
-					removeBargePlatform()
+					autoCollectState.collected[targetItem] = true
+					autoCollectState.attempts[targetItem]  = nil
 					if autoCollectState.statusTab and autoCollectState.statusTab.status then
-						autoCollectState.statusTab.status.Text = "Skipping barge for " .. SKIP_COOLDOWN .. "s..."
+						autoCollectState.statusTab.status.Text = "Gave up on barge after " .. COLLECT_MAX_TRIES .. " tries"
 						autoCollectState.statusTab.status.TextColor3 = C_ERR
 					end
 					autoCollectState.busy = false
@@ -2498,22 +3123,17 @@ task.spawn(function()
 					autoCollectState.statusTab.status.TextColor3 = C_WARN
 				end
 
-				interruptibleWait(0.2, currentPriority, targetItem)
+				interruptibleWait(0.25, currentPriority, targetItem)
 				autoCollectState.busy = false
 				return
 			end
-			-- ===== END SCRAP BARGE =====
 
-			-- Non-barge target: remove barge platform if still present
-			removeBargePlatform()
-
-			-- ===== Non-scrap collection =====
 			local distToTarget = (targetData.pos - hrp.Position).Magnitude
 			local moved        = false
 			local preempted    = false
 
-			local retryMoveThreshold = (targetCat == "Buried Supplies") and 1 or 3
-			local shouldMove = (distToTarget > 10) or (retryNum >= retryMoveThreshold)
+			local retryMoveThreshold = (targetCat == "Buried Supplies") and 2 or 3
+			local shouldMove = (distToTarget > 12) or (retryNum >= retryMoveThreshold)
 
 			if shouldMove then
 				if autoCollectState.mode == "Teleport" then
@@ -2553,8 +3173,7 @@ task.spawn(function()
 				return
 			end
 
-			if moved and targetItem:IsDescendantOf(workspace) and action then
-				-- Ensure grounded before pressing H
+			if moved and not isItemCollectedState(targetItem) and action then
 				if targetCat == "Spawned Items" or targetCat == "World Events" or targetCat == "Buried Supplies" then
 					waitUntilStable(0.5)
 				end
@@ -2564,7 +3183,7 @@ task.spawn(function()
 						autoCollectState.statusTab.status.Text = action.hint
 						autoCollectState.statusTab.status.TextColor3 = C_WARN
 					else
-						autoCollectState.statusTab.status.Text = "Pressing " .. action.key .. " for " .. name
+						autoCollectState.statusTab.status.Text = "Collecting: " .. name
 						autoCollectState.statusTab.status.TextColor3 = C_OK
 					end
 				end
@@ -2575,21 +3194,16 @@ task.spawn(function()
 
 				local lastMethod = nil
 				for _ = 1, (action.multiHolds or 1) do
-					if not targetItem:IsDescendantOf(workspace) then break end
+					if isItemCollectedState(targetItem) then break end
 					if not autoCollectState.running then break end
 					if shouldInterrupt() then preempted = true; break end
 
-					if isFastWorldEvent then
-						triggerPromptsOnItem(targetItem)
-					else
-						task.spawn(triggerPromptsOnItem, targetItem)
-					end
+					local interactOk = triggerInteractOnItem(targetItem, shouldInterrupt)
+					if interactOk then lastMethod = "prompt/remote" end
 
-					local keyOk, method = simulateKey(action.key, action.holdTime, targetItem, shouldInterrupt)
-					if method then lastMethod = method end
-					if not keyOk and autoCollectState.statusTab and autoCollectState.statusTab.status then
-						autoCollectState.statusTab.status.Text = "Key " .. action.key .. " FAILED (no method worked)"
-						autoCollectState.statusTab.status.TextColor3 = C_ERR
+					if not isItemCollectedState(targetItem) then
+						local keyOk, method = simulateKey(action.key, action.holdTime, targetItem, shouldInterrupt)
+						if keyOk and method then lastMethod = method end
 					end
 
 					if not isFastWorldEvent then
@@ -2599,9 +3213,9 @@ task.spawn(function()
 				end
 
 				if lastMethod and autoCollectState.statusTab and autoCollectState.statusTab.status
-						and not preempted and targetItem:IsDescendantOf(workspace) then
+						and not preempted and not isItemCollectedState(targetItem) then
 					autoCollectState.statusTab.status.Text =
-						string.format("Pressed %s via %s (%s)", action.key, lastMethod, name)
+						string.format("Triggered via %s (%s)", lastMethod, name)
 				end
 			end
 
@@ -2610,10 +3224,9 @@ task.spawn(function()
 				return
 			end
 
-			if not targetItem:IsDescendantOf(workspace) then
+			if isItemCollectedState(targetItem) then
 				autoCollectState.collected[targetItem] = true
 				autoCollectState.attempts[targetItem]  = nil
-				autoCollectState.skippedUntil[targetItem] = nil
 
 				if isFastWorldEvent then
 					lastLoopFast = true
@@ -2630,11 +3243,9 @@ task.spawn(function()
 				autoCollectState.attempts[targetItem] = nextAtt
 
 				if nextAtt.count >= COLLECT_MAX_TRIES then
-					-- Temporary cooldown instead of permanent blacklist
-					autoCollectState.skippedUntil[targetItem] = os.clock() + SKIP_COOLDOWN
-					autoCollectState.attempts[targetItem]     = nil
+					autoCollectState.collected[targetItem] = true
 					if autoCollectState.statusTab and autoCollectState.statusTab.status then
-						autoCollectState.statusTab.status.Text = string.format("Cooldown (%ds): %s", SKIP_COOLDOWN, name)
+						autoCollectState.statusTab.status.Text = "Gave up: " .. name
 						autoCollectState.statusTab.status.TextColor3 = C_WARN
 					end
 					task.wait(isFastWorldEvent and 0.03 or 0.5)
@@ -2653,10 +3264,15 @@ task.spawn(function()
 		if not ok then
 			warn("[AutoCollect] Recovered from loop error:", err)
 			autoCollectState.busy = false
-			removeBargePlatform()
+			autoCollectState.lockedBarge = nil
+			autoCollectState.lockedBargeCF = nil
 			local c = LocalPlayer.Character
 			local h = c and c:FindFirstChild("HumanoidRootPart")
 			if h then h.Anchored = false end
+			local stopCtrl, stopU69 = getPlayerController()
+			if stopCtrl then
+				resetStuckCombatStates(stopCtrl, stopU69)
+			end
 			task.wait(0.5)
 		end
 
@@ -3063,6 +3679,192 @@ local function buildMiscBody(tab, parentFrame)
 	tab.state = { shownCount = 0 }
 end
 
+--=====================================================================
+-- Background / Multi-Instance Optimization (Eco Mode + 3D Render Toggle)
+--=====================================================================
+local LightingService = game:GetService("Lighting")
+
+local ecoState = {
+	enabled = false,
+	no3d = false,
+	origFpsCap = nil,
+	origQualityLevel = nil,
+	origSavedQuality = nil,
+	origMasterVolume = nil,
+	origGlobalShadows = nil,
+	origTechnology = nil,
+	origFogEnd = nil,
+	origTerrain = nil,
+	origEffects = {},
+	descConn = nil,
+}
+
+local function isEcoVfxInstance(inst)
+	return inst:IsA("PostEffect")
+		or inst:IsA("ParticleEmitter")
+		or inst:IsA("Trail")
+		or inst:IsA("Beam")
+		or inst:IsA("Fire")
+		or inst:IsA("Smoke")
+		or inst:IsA("Sparkles")
+		or inst:IsA("Clouds")
+end
+
+local function disableVfxForEco(inst)
+	if not ecoState.enabled then return end
+	if isEcoVfxInstance(inst) then
+		if ecoState.origEffects[inst] == nil then
+			local okEn, en = pcall(function() return inst.Enabled end)
+			if okEn and type(en) == "boolean" then
+				ecoState.origEffects[inst] = en
+			end
+		end
+		pcall(function() inst.Enabled = false end)
+	end
+end
+
+local function toggleEcoMode(state)
+	if state == ecoState.enabled then return end
+	ecoState.enabled = (state == true)
+
+	local ugs
+	pcall(function() ugs = UserSettings():GetService("UserGameSettings") end)
+	local renderSettings
+	pcall(function()
+		if typeof(settings) == "function" then
+			renderSettings = settings().Rendering
+		end
+	end)
+	local terrain = workspace:FindFirstChildOfClass("Terrain")
+
+	if ecoState.enabled then
+		-- 1. Save & limit FPS to 15
+		if typeof(getfpscap) == "function" then
+			local okCap, curCap = pcall(getfpscap)
+			if okCap and type(curCap) == "number" and curCap > 0 then
+				ecoState.origFpsCap = curCap
+			end
+		end
+		if typeof(setfpscap) == "function" then
+			pcall(setfpscap, 15)
+		end
+
+		-- 2. Drop Rendering Quality & SavedQualityLevel to lowest
+		if renderSettings then
+			pcall(function()
+				ecoState.origQualityLevel = renderSettings.QualityLevel
+				renderSettings.QualityLevel = Enum.QualityLevel.Level01
+			end)
+		end
+		if ugs then
+			pcall(function()
+				ecoState.origSavedQuality = ugs.SavedQualityLevel
+				ugs.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
+			end)
+			-- 3. Mute audio across background instances
+			pcall(function()
+				ecoState.origMasterVolume = ugs.MasterVolume
+				ugs.MasterVolume = 0
+			end)
+		end
+
+		-- 4. Disable shadows & post-effects
+		pcall(function()
+			ecoState.origGlobalShadows = LightingService.GlobalShadows
+			LightingService.GlobalShadows = false
+		end)
+
+		-- 5. Flatten terrain water & grass decoration
+		if terrain then
+			pcall(function()
+				ecoState.origTerrain = {
+					WaterWaveSize = terrain.WaterWaveSize,
+					WaterWaveSpeed = terrain.WaterWaveSpeed,
+					WaterReflectance = terrain.WaterReflectance,
+					WaterTransparency = terrain.WaterTransparency,
+					Decoration = terrain.Decoration,
+				}
+				terrain.WaterWaveSize = 0
+				terrain.WaterWaveSpeed = 0
+				terrain.WaterReflectance = 0
+				terrain.WaterTransparency = 1
+				terrain.Decoration = false
+			end)
+		end
+
+		-- 6. Disable post-processing & particle/trail/beam VFX
+		table.clear(ecoState.origEffects)
+		for _, d in ipairs(LightingService:GetDescendants()) do
+			disableVfxForEco(d)
+		end
+		for _, d in ipairs(workspace:GetDescendants()) do
+			disableVfxForEco(d)
+		end
+		if ecoState.descConn then
+			ecoState.descConn:Disconnect()
+			ecoState.descConn = nil
+		end
+		ecoState.descConn = workspace.DescendantAdded:Connect(function(inst)
+			if not isInstanceAlive() or not ecoState.enabled then return end
+			disableVfxForEco(inst)
+		end)
+	else
+		if ecoState.descConn then
+			ecoState.descConn:Disconnect()
+			ecoState.descConn = nil
+		end
+
+		if typeof(setfpscap) == "function" then
+			pcall(setfpscap, ecoState.origFpsCap or 60)
+		end
+		if renderSettings and ecoState.origQualityLevel ~= nil then
+			pcall(function() renderSettings.QualityLevel = ecoState.origQualityLevel end)
+		end
+		if ugs then
+			if ecoState.origSavedQuality ~= nil then
+				pcall(function() ugs.SavedQualityLevel = ecoState.origSavedQuality end)
+			end
+			if ecoState.origMasterVolume ~= nil then
+				pcall(function() ugs.MasterVolume = ecoState.origMasterVolume end)
+			end
+		end
+		if ecoState.origGlobalShadows ~= nil then
+			pcall(function() LightingService.GlobalShadows = ecoState.origGlobalShadows end)
+		end
+		if terrain and ecoState.origTerrain then
+			pcall(function()
+				terrain.WaterWaveSize = ecoState.origTerrain.WaterWaveSize
+				terrain.WaterWaveSpeed = ecoState.origTerrain.WaterWaveSpeed
+				terrain.WaterReflectance = ecoState.origTerrain.WaterReflectance
+				terrain.WaterTransparency = ecoState.origTerrain.WaterTransparency
+				terrain.Decoration = ecoState.origTerrain.Decoration
+			end)
+		end
+		for inst, origEn in pairs(ecoState.origEffects) do
+			if inst and inst.Parent then
+				pcall(function() inst.Enabled = origEn end)
+			end
+		end
+		table.clear(ecoState.origEffects)
+	end
+end
+
+local function toggleNo3DRender(state)
+	ecoState.no3d = (state == true)
+	pcall(function()
+		RunService:Set3dRenderingEnabled(not ecoState.no3d)
+	end)
+end
+
+_G.StandOut_RestoreEco = function()
+	if ecoState.no3d then
+		toggleNo3DRender(false)
+	end
+	if ecoState.enabled then
+		toggleEcoMode(false)
+	end
+end
+
 local function buildAutoCollectBody(tab, parentFrame)
 	local body = Instance.new("Frame")
 	body.Position              = UDim2.fromOffset(143, 38)
@@ -3074,9 +3876,6 @@ local function buildAutoCollectBody(tab, parentFrame)
 	local targetOpts = {"Spawned Items", "Buried Supplies", "Scrap Barges", "World Events"}
 	buildMultiDropdown(body, "Target Categories", targetOpts, 14, function(selected)
 		autoCollectState.targets = selected
-		autoCollectState.returnedToOrigin = false
-		priorityCache.lastUpdate = 0
-		priorityCache.prio = math.huge
 	end)
 
 	local modeOpts = {"Teleport", "Tween"}
@@ -3099,7 +3898,7 @@ local function buildAutoCollectBody(tab, parentFrame)
 	startBtn.TextColor3 = C_TEXT
 	startBtn.BackgroundColor3 = C_ACCENT
 	startBtn.BorderSizePixel = 0
-	startBtn.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 36)
+	startBtn.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 34)
 	startBtn.Position = UDim2.fromOffset(PAGE_PAD_X, 254)
 	startBtn.Parent = body
 	corner(startBtn, 6)
@@ -3111,9 +3910,17 @@ local function buildAutoCollectBody(tab, parentFrame)
 	status.TextColor3 = C_SUB
 	status.BackgroundTransparency = 1
 	status.TextXAlignment = Enum.TextXAlignment.Left
-	status.Position = UDim2.fromOffset(PAGE_PAD_X, 304)
+	status.Position = UDim2.fromOffset(PAGE_PAD_X, 294)
 	status.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 16)
 	status.Parent = body
+
+	buildToggle(body, "Eco Mode (15 FPS + Min GFX)", 316, false, function(state)
+		toggleEcoMode(state)
+	end, true)
+
+	buildToggle(body, "Disable 3D Render (Multi-Box)", 348, false, function(state)
+		toggleNo3DRender(state)
+	end, true)
 
 	startBtn.MouseButton1Click:Connect(function()
 		closeAllDropdowns(body)
@@ -3126,20 +3933,24 @@ local function buildAutoCollectBody(tab, parentFrame)
 			local char = LocalPlayer.Character
 			local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 			if hrp then
-				autoCollectState.originCFrame = hrp.CFrame
-				if not savedPosition then savedPosition = hrp.CFrame end
+				if not savedPosition then
+					savedPosition = hrp.CFrame
+				end
+				autoCollectState.originCFrame = savedPosition
 			end
 
 			autoCollectState.collected        = {}
-			autoCollectState.skippedUntil     = {}
 			autoCollectState.attempts         = {}
 			autoCollectState.busy             = false
+			autoCollectState.lockedBarge      = nil
+			autoCollectState.lockedBargeCF    = nil
 			autoCollectState.cancelMove       = nil
 			autoCollectState.returnedToOrigin = false
 			priorityCache.lastUpdate          = 0
 			priorityCache.prio                = math.huge
 
 			rescanScrapPieces()
+			getPlayerController()
 
 			startBtn.Text = "Stop Auto Collect"
 			startBtn.BackgroundColor3 = C_ERR
@@ -3151,7 +3962,8 @@ local function buildAutoCollectBody(tab, parentFrame)
 				autoCollectState.cancelMove = nil
 			end
 			clearTweenVisuals()
-			removeBargePlatform()
+			autoCollectState.lockedBarge      = nil
+			autoCollectState.lockedBargeCF    = nil
 			autoCollectState.busy             = false
 			autoCollectState.originCFrame     = nil
 			autoCollectState.returnedToOrigin = false
@@ -3159,6 +3971,10 @@ local function buildAutoCollectBody(tab, parentFrame)
 			local c = LocalPlayer.Character
 			local h = c and c:FindFirstChild("HumanoidRootPart")
 			if h then h.Anchored = false end
+			local stopCtrl, stopU69 = getPlayerController()
+			if stopCtrl then
+				resetStuckCombatStates(stopCtrl, stopU69)
+			end
 
 			startBtn.Text = "Start Auto Collect"
 			startBtn.BackgroundColor3 = C_ACCENT
@@ -3256,7 +4072,6 @@ local function buildSpawnRouteBody(tab, parentFrame)
 		end
 		if autoCollectState.running then
 			autoCollectState.running = false
-			removeBargePlatform()
 			if autoCollectState.statusTab and autoCollectState.statusTab.startBtn then
 				autoCollectState.statusTab.startBtn.Text = "Start Auto Collect"
 				autoCollectState.statusTab.startBtn.BackgroundColor3 = C_ACCENT
@@ -3469,7 +4284,13 @@ local function createManager(tab)
 				tab.status.TextColor3 = C_ERR
 				return
 			end
-			local ok, err = teleportToItem(item, false, tab.name == "Scrap Barges")
+			if tab.name == "Scrap Barges" then
+				local pos = getItemPosition(item)
+				if pos then
+					ensureBargePlatform(item, pos + Vector3.new(0, 3, 0))
+				end
+			end
+			local ok, err = teleportToItem(item)
 			if ok then
 				tab.status.Text       = "Teleported to: " .. displayName
 				tab.status.TextColor3 = C_OK
