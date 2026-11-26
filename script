@@ -712,6 +712,15 @@ local function stroke(parent, color, thickness, transparency)
 end
 
 local function getDisplayName(item, tabName)
+	if tabName == "Turkeys" then
+		local numId = item.Name:match("_(%d+)$")
+		local variant = item:GetAttribute("TurkeyVariant")
+		local base = numId and ("Turkey #" .. numId) or item.Name
+		if type(variant) == "string" and variant ~= "" and variant ~= "Normal" then
+			return base .. " [" .. variant .. "]"
+		end
+		return base
+	end
 	if tabName == "Cases" or tabName == "Teleports" or tabName == "Scrap Barges" then
 		return item.Name
 	end
@@ -773,6 +782,15 @@ local function collectEntries(container, tabName)
 	if tabName == "Supplies" then
 		for _, child in container:GetChildren() do
 			if child.Name:match("^BuriedSupplies") then
+				table.insert(entries, child)
+			end
+		end
+		return entries
+	end
+
+	if tabName == "Turkeys" then
+		for _, child in container:GetChildren() do
+			if (child:IsA("Model") or child:IsA("BasePart")) and string.lower(child.Name):match("^turkey_%d+") then
 				table.insert(entries, child)
 			end
 		end
@@ -1496,9 +1514,9 @@ closeBtn.MouseLeave:Connect(function() closeBtn.BackgroundTransparency = 1 end)
 local tabBar = Instance.new("ScrollingFrame")
 tabBar.Name                  = "TabBar"
 tabBar.Position              = UDim2.fromOffset(0, 38)
-tabBar.Size                  = UDim2.new(0, 142, 1, -38)
-tabBar.BackgroundColor3      = C_HEADER
-tabBar.BackgroundTransparency = 0.35
+tabBar.Size                  = UDim2.new(0, 142, 1, -46)
+tabBar.BackgroundColor3      = C_BG
+tabBar.BackgroundTransparency = 1
 tabBar.BorderSizePixel       = 0
 tabBar.ScrollBarThickness    = 2
 tabBar.ScrollBarImageColor3  = C_STROKE
@@ -1517,12 +1535,12 @@ do
 
 	local tabPad = Instance.new("UIPadding")
 	tabPad.PaddingTop    = UDim.new(0, 10)
-	tabPad.PaddingBottom = UDim.new(0, 10)
+	tabPad.PaddingBottom = UDim.new(0, 6)
 	tabPad.Parent        = tabBar
 end
 
 local separator = Instance.new("Frame")
-separator.Size = UDim2.new(0, 1, 1, -38)
+separator.Size = UDim2.new(0, 1, 1, -39)
 separator.Position = UDim2.fromOffset(142, 38)
 separator.BackgroundColor3 = C_STROKE
 separator.BackgroundTransparency = 0.45
@@ -1533,8 +1551,7 @@ local footer = Instance.new("Frame")
 footer.Name                    = "Footer"
 footer.Position                = UDim2.new(0, 143, 1, -44)
 footer.Size                    = UDim2.new(1, -143, 0, 44)
-footer.BackgroundColor3        = C_HEADER
-footer.BackgroundTransparency  = 0.55
+footer.BackgroundTransparency  = 1
 footer.BorderSizePixel         = 0
 footer.Parent                  = main
 
@@ -2333,6 +2350,59 @@ end
 -- Auto Collect state
 --=====================================================================
 local appMod = {}
+
+;(function()
+	local camNoclipOn = false
+	local popperUpIdx = nil
+	local noopPopper = function(_, targetDist)
+		return targetDist
+	end
+
+	local function resolvePopperHook()
+		local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+		local pm = ps and ps:FindFirstChild("PlayerModule")
+		local cm = pm and pm:FindFirstChild("CameraModule")
+		local zcMod = cm and cm:FindFirstChild("ZoomController")
+		local pMod = zcMod and zcMod:FindFirstChild("Popper")
+		if not (zcMod and pMod) then return nil, nil end
+		local okZ, zc = pcall(require, zcMod)
+		local okP, origP = pcall(require, pMod)
+		if not (okZ and okP and type(zc) == "table" and type(zc.Update) == "function" and type(origP) == "function") then
+			return nil, nil
+		end
+		if type(_G.StandOut_PopperOrig) ~= "function" then
+			_G.StandOut_PopperOrig = origP
+		end
+		if popperUpIdx then
+			return zc.Update, popperUpIdx
+		end
+		if typeof(debug) == "table" and type(debug.getupvalues) == "function" then
+			for idx, val in pairs(debug.getupvalues(zc.Update)) do
+				if val == _G.StandOut_PopperOrig or val == origP then
+					popperUpIdx = idx
+					return zc.Update, idx
+				end
+			end
+		end
+		return nil, nil
+	end
+
+	appMod.toggleCameraNoclip = function(state)
+		camNoclipOn = (state == true)
+		local fn, idx = resolvePopperHook()
+		if fn and idx and typeof(debug) == "table" and type(debug.setupvalue) == "function" then
+			if camNoclipOn then
+				pcall(debug.setupvalue, fn, idx, noopPopper)
+			elseif type(_G.StandOut_PopperOrig) == "function" then
+				pcall(debug.setupvalue, fn, idx, _G.StandOut_PopperOrig)
+			end
+		end
+	end
+
+	appMod.isCameraNoclipEnabled = function()
+		return camNoclipOn == true
+	end
+end)()
 
 local autoCollectState = {
 	running          = false,
@@ -4013,6 +4083,8 @@ tabs = {
 		getContainer = function() return scrapBeaconFolder end, },
 	{ name = "World Events", emptyText = "No world event drops found.", autoHighlight = false, notify = true,
 		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("WorldEventDrops") end, },
+	{ name = "Turkeys", emptyText = "No turkeys spawned.", autoHighlight = true, hasAutoHighlightToggle = true, isTurkeyTab = true, notify = true,
+		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("Players") end, },
 	{ name = "Auto Farm", isAutoFarm = true, isCustom = true, },
 	{ name = "Miscellaneous", isMisc = true, isCustom = true, },
 	{ name = "Configs", isConfigs = true, isCustom = true, },
@@ -4084,9 +4156,9 @@ local function buildTabBody(tab, parentFrame)
 	toggleLbl.TextSize = 11
 	toggleLbl.TextColor3 = C_SUB
 	toggleLbl.BackgroundTransparency = 1
-	toggleLbl.Position = UDim2.fromOffset(PAGE_PAD_X, 0)
-	toggleLbl.Size = UDim2.new(1, -100, 1, 0)
-	toggleLbl.TextXAlignment = Enum.TextXAlignment.Left
+	toggleLbl.Position = tab.hasAutoHighlightToggle and UDim2.new(1, -150, 0, 0) or UDim2.fromOffset(PAGE_PAD_X, 0)
+	toggleLbl.Size = tab.hasAutoHighlightToggle and UDim2.new(0, 84, 1, 0) or UDim2.new(1, -100, 1, 0)
+	toggleLbl.TextXAlignment = tab.hasAutoHighlightToggle and Enum.TextXAlignment.Right or Enum.TextXAlignment.Left
 	toggleLbl.Parent = toggleBar
 
 	local toggleBtn = Instance.new("TextButton")
@@ -4101,6 +4173,75 @@ local function buildTabBody(tab, parentFrame)
 	toggleBtn.Parent = toggleBar
 	corner(toggleBtn, 10)
 
+	if tab.hasAutoHighlightToggle then
+		local hlAllLbl = Instance.new("TextLabel")
+		hlAllLbl.Text = "Auto-HL"
+		hlAllLbl.Font = Enum.Font.GothamBold
+		hlAllLbl.TextSize = 11
+		hlAllLbl.TextColor3 = C_SUB
+		hlAllLbl.BackgroundTransparency = 1
+		hlAllLbl.Position = UDim2.fromOffset(PAGE_PAD_X, 0)
+		hlAllLbl.Size = UDim2.new(0, 52, 1, 0)
+		hlAllLbl.TextXAlignment = Enum.TextXAlignment.Left
+		hlAllLbl.Parent = toggleBar
+
+		local hlAllBtn = Instance.new("TextButton")
+		hlAllBtn.Text = tab.autoHighlight and "ON" or "OFF"
+		hlAllBtn.Font = Enum.Font.GothamBold
+		hlAllBtn.TextSize = 10
+		hlAllBtn.TextColor3 = C_TEXT
+		hlAllBtn.BackgroundColor3 = tab.autoHighlight and C_OK or C_ROW
+		hlAllBtn.BorderSizePixel = 0
+		hlAllBtn.Size = UDim2.fromOffset(42, 20)
+		hlAllBtn.Position = UDim2.fromOffset(PAGE_PAD_X + 54, 8)
+		hlAllBtn.Parent = toggleBar
+		corner(hlAllBtn, 10)
+
+		hlAllBtn.MouseButton1Click:Connect(function()
+			tab.autoHighlight = not tab.autoHighlight
+			hlAllBtn.Text = tab.autoHighlight and "ON" or "OFF"
+			hlAllBtn.BackgroundColor3 = tab.autoHighlight and C_OK or C_ROW
+			if not tab.autoHighlight and tab.state and tab.state.knownItems then
+				for item in pairs(tab.state.knownItems) do
+					clearHighlight(item)
+					local r = tab.state.rows and tab.state.rows[item]
+					if r and r.hl then r.hl.BackgroundColor3 = C_ROW_HOT end
+				end
+			end
+			if tab.rebuild then tab.rebuild() end
+		end)
+		tab.hlAllBtn = hlAllBtn
+	end
+
+	local topContentY = 46
+	if tab.isTurkeyTab then
+		local farmBtn = Instance.new("TextButton")
+		farmBtn.Text = "Start Turkey Farm"
+		farmBtn.Font = Enum.Font.GothamBold
+		farmBtn.TextSize = 12
+		farmBtn.TextColor3 = C_TEXT
+		farmBtn.BackgroundColor3 = C_ACCENT
+		farmBtn.BorderSizePixel = 0
+		farmBtn.Position = UDim2.fromOffset(PAGE_PAD_X, 42)
+		farmBtn.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 28)
+		farmBtn.Parent = body
+		corner(farmBtn, 6)
+		tab.turkeyFarmBtn = farmBtn
+
+		farmBtn.MouseButton1Click:Connect(function()
+			if appMod.toggleTurkeyFarm then
+				appMod.toggleTurkeyFarm()
+			end
+		end)
+
+		tab.turkeyOffsetSlider = buildSlider(body, "Below Latch Offset (studs)", 1.5, 12.0, 5.7, 74, false, function(val)
+			if appMod.setTurkeyLatchDistance then
+				appMod.setTurkeyLatchDistance(val)
+			end
+		end)
+		topContentY = 130
+	end
+
 	local search = Instance.new("TextBox")
 	search.PlaceholderText   = "Filter by name..."
 	search.Text              = ""
@@ -4111,7 +4252,7 @@ local function buildTabBody(tab, parentFrame)
 	search.PlaceholderColor3 = C_SUB
 	search.BackgroundColor3  = C_PANEL
 	search.BorderSizePixel   = 0
-	search.Position          = UDim2.fromOffset(PAGE_PAD_X, 46)
+	search.Position          = UDim2.fromOffset(PAGE_PAD_X, topContentY)
 	search.Size              = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 26)
 	search.TextXAlignment    = Enum.TextXAlignment.Left
 	search.Parent            = body
@@ -4126,13 +4267,13 @@ local function buildTabBody(tab, parentFrame)
 	status.TextColor3        = C_SUB
 	status.BackgroundTransparency = 1
 	status.TextXAlignment    = Enum.TextXAlignment.Left
-	status.Position          = UDim2.fromOffset(PAGE_PAD_X, 76)
+	status.Position          = UDim2.fromOffset(PAGE_PAD_X, topContentY + 30)
 	status.Size              = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 16)
 	status.Parent            = body
 
 	local scroll = Instance.new("ScrollingFrame")
-	scroll.Position              = UDim2.fromOffset(PAGE_PAD_X, 96)
-	scroll.Size                  = UDim2.new(1, PAGE_WIDTH_OFFSET, 1, -106)
+	scroll.Position              = UDim2.fromOffset(PAGE_PAD_X, topContentY + 50)
+	scroll.Size                  = UDim2.new(1, PAGE_WIDTH_OFFSET, 1, -(topContentY + 60))
 	scroll.BackgroundTransparency= 1
 	scroll.BorderSizePixel       = 0
 	scroll.ScrollBarThickness    = 3
@@ -4157,8 +4298,8 @@ local function buildTabBody(tab, parentFrame)
 	empty.TextColor3        = C_SUB
 	empty.BackgroundTransparency = 1
 	empty.TextWrapped       = true
-	empty.Position          = UDim2.fromOffset(PAGE_PAD_X, 96)
-	empty.Size              = UDim2.new(1, PAGE_WIDTH_OFFSET, 1, -106)
+	empty.Position          = UDim2.fromOffset(PAGE_PAD_X, topContentY + 50)
+	empty.Size              = UDim2.new(1, PAGE_WIDTH_OFFSET, 1, -(topContentY + 60))
 	empty.Visible           = false
 	empty.Parent            = body
 
@@ -4187,7 +4328,7 @@ local function buildMiscBody(tab, parentFrame)
 
 	local miscSpacer = Instance.new("Frame")
 	miscSpacer.BackgroundTransparency = 1
-	miscSpacer.Position = UDim2.fromOffset(0, 392)
+	miscSpacer.Position = UDim2.fromOffset(0, 428)
 	miscSpacer.Size = UDim2.new(1, 0, 0, 14)
 	miscSpacer.Parent = body
 
@@ -4211,34 +4352,38 @@ local function buildMiscBody(tab, parentFrame)
 		showEspDistance = state
 	end, true)
 
+	configControls.camNoclip = buildToggle(body, "Camera Noclip (Through Walls)", 106, false, function(state)
+		if appMod.toggleCameraNoclip then appMod.toggleCameraNoclip(state) end
+	end, true)
+
 	local lblMove = Instance.new("TextLabel")
 	lblMove.Text = "Movement"
 	lblMove.Font = Enum.Font.GothamBold
 	lblMove.TextSize = 11
 	lblMove.TextColor3 = C_ACCENT_SOFT
 	lblMove.BackgroundTransparency = 1
-	lblMove.Position = UDim2.fromOffset(PAGE_PAD_X, 114)
+	lblMove.Position = UDim2.fromOffset(PAGE_PAD_X, 150)
 	lblMove.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 18)
 	lblMove.TextXAlignment = Enum.TextXAlignment.Left
 	lblMove.Parent = body
 
-	configControls.fly = buildToggle(body, "Fly (WASD + Space/Shift)", 136, false, function(state)
+	configControls.fly = buildToggle(body, "Fly (WASD + Space/Shift)", 172, false, function(state)
 		toggleFly(state)
 	end, true)
 
-	configControls.flySpeed = buildSlider(body, "Fly Speed", 10, 500, 50, 174, true, function(val)
+	configControls.flySpeed = buildSlider(body, "Fly Speed", 10, 500, 50, 210, true, function(val)
 		flySpeed = val
 	end)
 
-	configControls.noclip = buildToggle(body, "Noclip", 232, false, function(state)
+	configControls.noclip = buildToggle(body, "Noclip", 268, false, function(state)
 		toggleNoclip(state)
 	end, true)
 
-	configControls.walkspeed = buildToggle(body, "Walkspeed", 268, false, function(state)
+	configControls.walkspeed = buildToggle(body, "Walkspeed", 304, false, function(state)
 		toggleWalkspeed(state)
 	end, true)
 
-	configControls.wsSpeed = buildSlider(body, "Walkspeed Value", 16, 300, 16, 306, true, function(val)
+	configControls.wsSpeed = buildSlider(body, "Walkspeed Value", 16, 300, 16, 342, true, function(val)
 		wsSpeed = val
 	end)
 
@@ -4787,6 +4932,9 @@ _G.StandOut_RestoreEco = function()
 	end
 	if _G.StandOut_CleanupHide then
 		pcall(_G.StandOut_CleanupHide)
+	end
+	if appMod.toggleCameraNoclip then
+		pcall(appMod.toggleCameraNoclip, false)
 	end
 end
 
@@ -7506,6 +7654,241 @@ end
 end)()
 
 --=====================================================================
+-- Turkey Event Auto-Farm (Latch Strictly From Below)
+--=====================================================================
+;(function()
+	local turkeyFarmState = {
+		running = false,
+		autoLight = true,
+		autoHeavy = true,
+		m1BeforeMove = 2,
+		latchMode = "Below (Face Up)",
+		latchDistance = 5.7,
+		selectedSkills = { ["Skill 1"] = true, ["Skill 2"] = true, ["Skill 3"] = true, ["Skill 4"] = true },
+		heldSkills = {},
+		selectedEX = {},
+		noclipModified = {},
+		noclipChar = nil,
+		noclipParts = nil,
+		usedNoclipLatch = false,
+		m1ComboCount = 0,
+		lastTargetY = nil,
+		lastLightAt = 0,
+		lastHeavyAt = 0,
+		lastSkillAt = 0,
+		lastSummonAt = 0,
+		attackBusyUntil = 0,
+		swingIter = 1,
+		skillLocalCd = {},
+		activeTarget = nil,
+		completedCount = 0,
+	}
+
+	local function getTurkeyTab()
+		for _, t in ipairs(tabs) do
+			if t.isTurkeyTab then return t end
+		end
+		return nil
+	end
+
+	local function setTurkeyStatus(txt, col)
+		local t = getTurkeyTab()
+		if not t or not t.status then return end
+		if t.status.Text ~= txt then t.status.Text = txt end
+		local c = col or C_SUB
+		if t.status.TextColor3 ~= c then t.status.TextColor3 = c end
+	end
+
+	local function pickActiveTurkeyTarget()
+		if not appMod.combat then return nil end
+		local gameFolder = workspace:FindFirstChild("Game")
+		local pl = gameFolder and gameFolder:FindFirstChild("Players")
+		if not pl then return nil end
+
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local myPos = hrp and hrp.Position
+
+		local bestModel, bestHrp, bestHum = nil, nil, nil
+		local bestPriority, bestDist = -1, math.huge
+
+		for _, ch in ipairs(pl:GetChildren()) do
+			if (ch:IsA("Model") or ch:IsA("BasePart")) and string.lower(ch.Name):match("^turkey_%d+") then
+				local tHrp, tHum = appMod.combat.isModelAlive(ch)
+				if tHrp and tHum then
+					local prio = (ch:GetAttribute("PassedOut") == true) and 0 or 1
+					local dist = myPos and (tHrp.Position - myPos).Magnitude or 0
+					if prio > bestPriority or (prio == bestPriority and dist < bestDist) then
+						bestPriority = prio
+						bestDist = dist
+						bestModel = ch
+						bestHrp = tHrp
+						bestHum = tHum
+					end
+				end
+			end
+		end
+
+		return bestModel, bestHrp, bestHum
+	end
+
+	local function setTurkeyFarmRunning(shouldRun)
+		shouldRun = (shouldRun == true)
+		if shouldRun == turkeyFarmState.running then return end
+		turkeyFarmState.running = shouldRun
+
+		local t = getTurkeyTab()
+		if t and t.turkeyFarmBtn then
+			t.turkeyFarmBtn.Text = shouldRun and "Stop Turkey Farm" or "Start Turkey Farm"
+			t.turkeyFarmBtn.BackgroundColor3 = shouldRun and C_ERR or C_ACCENT
+		end
+
+		if shouldRun then
+			turkeyFarmState.m1ComboCount = 0
+			setTurkeyStatus("Status: Looking for turkeys...", C_WARN)
+		else
+			turkeyFarmState.activeTarget = nil
+			if appMod.combat and appMod.combat.releaseLock then
+				appMod.combat.releaseLock(turkeyFarmState)
+			end
+			setTurkeyStatus("Status: Stopped | Clears: " .. tostring(turkeyFarmState.completedCount), C_SUB)
+		end
+	end
+
+	appMod.isTurkeyFarmRunning = function() return turkeyFarmState.running == true end
+	appMod.setTurkeyFarmRunning = setTurkeyFarmRunning
+	appMod.toggleTurkeyFarm = function() setTurkeyFarmRunning(not turkeyFarmState.running) end
+	appMod.setTurkeyLatchDistance = function(val)
+		turkeyFarmState.latchDistance = math.clamp(tonumber(val) or 5.7, 1.5, 12.0)
+	end
+	appMod.serializeTurkeyConfig = function()
+		local t = getTurkeyTab()
+		return {
+			farmRunning   = turkeyFarmState.running == true,
+			latchDistance = (t and t.turkeyOffsetSlider and t.turkeyOffsetSlider.getValue()) or turkeyFarmState.latchDistance,
+		}
+	end
+	appMod.applyTurkeyConfig = function(cfg)
+		if type(cfg) ~= "table" then return end
+		local t = getTurkeyTab()
+		if cfg.latchDistance ~= nil then
+			if t and t.turkeyOffsetSlider then
+				t.turkeyOffsetSlider.setValue(cfg.latchDistance)
+			else
+				appMod.setTurkeyLatchDistance(cfg.latchDistance)
+			end
+		end
+		if cfg.farmRunning ~= nil then
+			setTurkeyFarmRunning(cfg.farmRunning == true)
+		end
+	end
+
+	RunService.Heartbeat:Connect(function()
+		if not isInstanceAlive() then return end
+		if not turkeyFarmState.running then return end
+		if not appMod.combat then return end
+
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not char or not hrp or not hum or hum.Health <= 0 then return end
+		if appMod.combat.isStandSummoned and not appMod.combat.isStandSummoned(char) then return end
+
+		local targetModel, tHrp, tHum = pickActiveTurkeyTarget()
+		if not targetModel or not tHrp or not tHum then return end
+
+		turkeyFarmState.latchMode = "Below (Face Up)"
+		appMod.combat.applyLatch(turkeyFarmState, char, hrp, tHrp.CFrame)
+	end)
+
+	task.spawn(function()
+		while isInstanceAlive() and not appMod.combat do
+			task.wait(0.05)
+		end
+		local prevModel = nil
+		local waitDur = 0.12
+		while true do
+			task.wait(waitDur)
+			waitDur = 0.12
+			if not isInstanceAlive() then return end
+
+			if prevModel and prevModel.Parent then
+				local pHum = prevModel:FindFirstChildOfClass("Humanoid")
+				if pHum and pHum.Health <= 0 then
+					turkeyFarmState.completedCount += 1
+					turkeyFarmState.activeTarget = nil
+					prevModel = nil
+					appMod.combat.releaseLock(turkeyFarmState)
+				end
+			elseif prevModel and not prevModel.Parent then
+				turkeyFarmState.completedCount += 1
+				turkeyFarmState.activeTarget = nil
+				prevModel = nil
+				appMod.combat.releaseLock(turkeyFarmState)
+			end
+
+			if not turkeyFarmState.running then
+				continue
+			end
+
+			local char = LocalPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if not char or not hrp or not hum or hum.Health <= 0 then
+				appMod.combat.releaseLock(turkeyFarmState)
+				setTurkeyStatus("Status: Waiting for character...", C_WARN)
+				continue
+			end
+
+			local targetModel, tHrp, tHum = pickActiveTurkeyTarget()
+			if not targetModel or not tHrp or not tHum then
+				if turkeyFarmState.activeTarget ~= nil then
+					turkeyFarmState.activeTarget = nil
+					appMod.combat.releaseLock(turkeyFarmState)
+				end
+				setTurkeyStatus("Status: Waiting for turkeys... | Clears: " .. tostring(turkeyFarmState.completedCount), C_SUB)
+				continue
+			end
+
+			if appMod.combat.getEquippedStand and appMod.combat.isStandSummoned and appMod.combat.ensureStandSummon then
+				if appMod.combat.getEquippedStand() ~= "" and not appMod.combat.isStandSummoned(char) then
+					appMod.combat.releaseLock(turkeyFarmState)
+					setTurkeyStatus("Status: Summoning Stand...", C_WARN)
+					appMod.combat.ensureStandSummon(char, hrp)
+					continue
+				end
+			end
+
+			prevModel = targetModel
+			if turkeyFarmState.activeTarget ~= targetModel then
+				turkeyFarmState.activeTarget = targetModel
+				turkeyFarmState.m1ComboCount = 0
+			end
+
+			local dist = (hrp.Position - tHrp.Position).Magnitude
+			if dist > (turkeyFarmState.latchDistance + 12) then
+				turkeyFarmState.latchMode = "Below (Face Up)"
+				appMod.combat.applyLatch(turkeyFarmState, char, hrp, tHrp.CFrame)
+			end
+
+			waitDur = 0.03
+			local hpCur = math.floor(tHum.Health + 0.5)
+			local hpMax = math.max(1, math.floor(tHum.MaxHealth + 0.5))
+			setTurkeyStatus(string.format("Fighting %s | HP: %d/%d | Clears: %d",
+				getDisplayName(targetModel, "Turkeys"), hpCur, hpMax, turkeyFarmState.completedCount), C_OK)
+
+			appMod.combat.runComboStep(turkeyFarmState, char, hrp, targetModel, tHrp)
+			if tHum.Health <= 0 then
+				turkeyFarmState.completedCount += 1
+				turkeyFarmState.activeTarget = nil
+				prevModel = nil
+				appMod.combat.releaseLock(turkeyFarmState)
+			end
+		end
+	end)
+end)()
+
+--=====================================================================
 -- Configs System & Auto-Load Persistence
 --=====================================================================
 ;(function()
@@ -7610,21 +7993,24 @@ local function serializeCurrentConfig()
 			autoCloak        = configControls.autoCloak and configControls.autoCloak.getState() or (appMod.isAutoCloakEnabled and appMod.isAutoCloakEnabled() == true),
 		},
 		misc = {
-			esp         = configControls.esp and configControls.esp.getState() or false,
-			espKey      = configControls.esp and configControls.esp.getKeybind() or nil,
-			espDistance = configControls.espDistance and configControls.espDistance.getState() or false,
-			espDistKey  = configControls.espDistance and configControls.espDistance.getKeybind() or nil,
-			fly         = configControls.fly and configControls.fly.getState() or false,
-			flyKey      = configControls.fly and configControls.fly.getKeybind() or nil,
-			flySpeed    = configControls.flySpeed and configControls.flySpeed.getValue() or flySpeed,
-			noclip      = configControls.noclip and configControls.noclip.getState() or false,
-			noclipKey   = configControls.noclip and configControls.noclip.getKeybind() or nil,
-			walkspeed   = configControls.walkspeed and configControls.walkspeed.getState() or false,
-			wsKey       = configControls.walkspeed and configControls.walkspeed.getKeybind() or nil,
-			wsSpeed     = configControls.wsSpeed and configControls.wsSpeed.getValue() or wsSpeed,
+			esp          = configControls.esp and configControls.esp.getState() or false,
+			espKey       = configControls.esp and configControls.esp.getKeybind() or nil,
+			espDistance  = configControls.espDistance and configControls.espDistance.getState() or false,
+			espDistKey   = configControls.espDistance and configControls.espDistance.getKeybind() or nil,
+			camNoclip    = configControls.camNoclip and configControls.camNoclip.getState() or false,
+			camNoclipKey = configControls.camNoclip and configControls.camNoclip.getKeybind() or nil,
+			fly          = configControls.fly and configControls.fly.getState() or false,
+			flyKey       = configControls.fly and configControls.fly.getKeybind() or nil,
+			flySpeed     = configControls.flySpeed and configControls.flySpeed.getValue() or flySpeed,
+			noclip       = configControls.noclip and configControls.noclip.getState() or false,
+			noclipKey    = configControls.noclip and configControls.noclip.getKeybind() or nil,
+			walkspeed    = configControls.walkspeed and configControls.walkspeed.getState() or false,
+			wsKey        = configControls.walkspeed and configControls.walkspeed.getKeybind() or nil,
+			wsSpeed      = configControls.wsSpeed and configControls.wsSpeed.getValue() or wsSpeed,
 		},
 		bosses       = appMod.serializeBossConfig and appMod.serializeBossConfig() or nil,
 		eliminations = appMod.serializeElimConfig and appMod.serializeElimConfig() or nil,
+		turkeys      = appMod.serializeTurkeyConfig and appMod.serializeTurkeyConfig() or nil,
 		priority     = appMod.farmPriority and { order = table.clone(appMod.farmPriority.order) } or nil,
 	}
 end
@@ -7644,6 +8030,8 @@ local function applyConfigTable(cfg)
 		if configControls.esp and m.espKey ~= nil then configControls.esp.setKeybind(m.espKey) end
 		if configControls.espDistance and m.espDistance ~= nil then configControls.espDistance.setState(m.espDistance) end
 		if configControls.espDistance and m.espDistKey ~= nil then configControls.espDistance.setKeybind(m.espDistKey) end
+		if configControls.camNoclip and m.camNoclip ~= nil then configControls.camNoclip.setState(m.camNoclip) end
+		if configControls.camNoclip and m.camNoclipKey ~= nil then configControls.camNoclip.setKeybind(m.camNoclipKey) end
 		if configControls.fly and m.fly ~= nil then configControls.fly.setState(m.fly) end
 		if configControls.fly and m.flyKey ~= nil then configControls.fly.setKeybind(m.flyKey) end
 		if configControls.noclip and m.noclip ~= nil then configControls.noclip.setState(m.noclip) end
@@ -7658,6 +8046,10 @@ local function applyConfigTable(cfg)
 
 	if type(cfg.eliminations) == "table" and appMod.applyElimConfig then
 		appMod.applyElimConfig(cfg.eliminations)
+	end
+
+	if type(cfg.turkeys) == "table" and appMod.applyTurkeyConfig then
+		appMod.applyTurkeyConfig(cfg.turkeys)
 	end
 
 	local perfCfg = type(cfg.perf) == "table" and cfg.perf or cfg.autoCollect
@@ -8785,6 +9177,9 @@ local function createManager(tab)
 			if container then
 				local function queue(child)
 					if child and (child.Name == "SIM_Marker" or child.Name == "SIM_Highlight") then return end
+					if tab.name == "Turkeys" and (not child or not string.lower(child.Name):match("^turkey_%d+")) then
+						return
+					end
 					if state.rebuildQueued then return end
 					state.rebuildQueued = true
 					local version = state.rebuildVersion
@@ -8796,8 +9191,13 @@ local function createManager(tab)
 						end
 					end)
 				end
-				state.addedConn   = container.DescendantAdded:Connect(queue)
-				state.removedConn = container.DescendantRemoving:Connect(queue)
+				if tab.name == "Turkeys" then
+					state.addedConn   = container.ChildAdded:Connect(queue)
+					state.removedConn = container.ChildRemoved:Connect(queue)
+				else
+					state.addedConn   = container.DescendantAdded:Connect(queue)
+					state.removedConn = container.DescendantRemoving:Connect(queue)
+				end
 			end
 		end
 
@@ -8853,6 +9253,10 @@ local function createManager(tab)
 				if not highlights[item] then
 					local p = getPart(item)
 					if p then applyHighlight(item, p) end
+				end
+				local data = state.rows[item]
+				if data and data.hl then
+					data.hl.BackgroundColor3 = highlights[item] and C_ACCENT or C_ROW_HOT
 				end
 			end
 		end
@@ -8930,11 +9334,15 @@ local function createManager(tab)
 		if shown == 0 then
 			tab.empty.Text    = (#entries == 0) and tab.emptyText or "No items match the filter."
 			tab.empty.Visible = true
-			tab.status.Text   = (#entries == 0) and "Waiting" or "Filter active"
-			tab.status.TextColor3 = C_SUB
+			if not (tab.isTurkeyTab and appMod.isTurkeyFarmRunning and appMod.isTurkeyFarmRunning()) then
+				tab.status.Text   = (#entries == 0) and "Waiting" or "Filter active"
+				tab.status.TextColor3 = C_SUB
+			end
 		else
 			tab.empty.Visible = false
-			tab.status.Text   = ""
+			if not (tab.isTurkeyTab and appMod.isTurkeyFarmRunning and appMod.isTurkeyFarmRunning()) then
+				tab.status.Text   = ""
+			end
 		end
 	end
 
@@ -9011,6 +9419,10 @@ updateCountLabel = function()
 	elseif activeTab.name == "World Events" then
 		countLabel.Text = count .. " drops"
 		countLabel.Size = UDim2.fromOffset(65, 22)
+		countLabel.BackgroundColor3 = C_ACCENT
+	elseif activeTab.name == "Turkeys" then
+		countLabel.Text = count .. " active"
+		countLabel.Size = UDim2.fromOffset(68, 22)
 		countLabel.BackgroundColor3 = C_ACCENT
 	else
 		countLabel.Text = "Total: " .. count
