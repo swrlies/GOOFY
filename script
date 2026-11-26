@@ -1,6 +1,6 @@
 --!nocheck
 --=====================================================================
--- Stand Out Dashboard v63
+-- Stand Out Dashboard v65
 --   * Tabbed-out Heavy Swing via PlayerController (token-verified
 --     heavySwing -> beginBasicAttack -> sendCombat -> meleeRemote)
 --   * Tabbed-out Item / Supply / World Event collection via zero-hold
@@ -17,6 +17,7 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 --=====================================================================
 local _INSTANCE_ID = tostring(os.time()) .. "_" .. tostring(math.random(1, 1e9))
 _G.StandOut_ActiveID = _INSTANCE_ID
+_G.StandOut_Version = "v65"
 if type(_G.StandOut_RestoreEco) == "function" then
 	pcall(_G.StandOut_RestoreEco)
 end
@@ -94,10 +95,13 @@ if isStrandedOnMainMenu() then
 				local cfgPath = "StandOutConfigs/" .. autoName .. ".json"
 				if autoName ~= "" and isfile(cfgPath) then
 					local dec = HttpService:JSONDecode(readfile(cfgPath))
-					if type(dec) == "table" and type(dec.autoCollect) == "table" then
-						if dec.autoCollect.ecoMode == true then ecoAuto = true end
-						if not isfile("StandOutHold/_autoplay_menu.txt") and dec.autoCollect.autoPlay == true then
-							autoPlayEnabled = true
+					if type(dec) == "table" then
+						local perfTbl = type(dec.perf) == "table" and dec.perf or dec.autoCollect
+						if type(perfTbl) == "table" then
+							if perfTbl.ecoMode == true then ecoAuto = true end
+							if not isfile("StandOutHold/_autoplay_menu.txt") and perfTbl.autoPlay == true then
+								autoPlayEnabled = true
+							end
 						end
 					end
 				end
@@ -117,13 +121,13 @@ if isStrandedOnMainMenu() then
 		menuGui.Parent = PlayerGui
 
 		local pill = Instance.new("TextLabel")
-		pill.Size = UDim2.fromOffset(250, 28)
-		pill.Position = UDim2.new(0.5, -125, 0, 12)
+		pill.Size = UDim2.fromOffset(264, 28)
+		pill.Position = UDim2.new(0.5, -132, 0, 12)
 		pill.BackgroundColor3 = Color3.fromRGB(22, 25, 32)
 		pill.TextColor3 = Color3.fromRGB(238, 241, 246)
 		pill.Font = Enum.Font.GothamBold
 		pill.TextSize = 12
-		pill.Text = "Stand Out: Auto-Play waiting..."
+		pill.Text = "Stand Out v65: Auto-Play waiting..."
 		pill.Parent = menuGui
 		local mc = Instance.new("UICorner"); mc.CornerRadius = UDim.new(0, 6); mc.Parent = pill
 
@@ -185,14 +189,14 @@ local CATEGORY_PRIORITY = {
 	["Scrap Barges"]    = 3,
 }
 
-local C_BG          = Color3.fromRGB(16, 18, 23)
-local C_HEADER      = Color3.fromRGB(22, 25, 32)
-local C_PANEL       = Color3.fromRGB(28, 32, 41)
-local C_ROW         = Color3.fromRGB(32, 36, 46)
-local C_ROW_HOT     = Color3.fromRGB(44, 49, 62)
-local C_STROKE      = Color3.fromRGB(48, 54, 68)
-local C_ACCENT      = Color3.fromRGB(110, 40, 235)
-local C_ACCENT_SOFT = Color3.fromRGB(88, 32, 195)
+local C_BG          = Color3.fromRGB(14, 16, 21)
+local C_HEADER      = Color3.fromRGB(20, 23, 30)
+local C_PANEL       = Color3.fromRGB(25, 29, 38)
+local C_ROW         = Color3.fromRGB(31, 36, 47)
+local C_ROW_HOT     = Color3.fromRGB(42, 48, 62)
+local C_STROKE      = Color3.fromRGB(48, 55, 72)
+local C_ACCENT      = Color3.fromRGB(110, 48, 235)
+local C_ACCENT_SOFT = Color3.fromRGB(92, 40, 200)
 local C_ACCENT_DIM  = Color3.fromRGB(68, 32, 135)
 local C_TEXT        = Color3.fromRGB(238, 241, 246)
 local C_SUB         = Color3.fromRGB(145, 155, 172)
@@ -1322,29 +1326,68 @@ gui.ResetOnSpawn = false
 gui.DisplayOrder = 999
 gui.Parent       = PlayerGui
 
+local uiChrome = {
+	defaultW = 550,
+	defaultH = 560,
+	minW = 450,
+	minH = 380,
+	sizePath = "StandOutHold/_window_size.txt",
+	gripBars = {},
+}
+
+do
+	local w, h = uiChrome.defaultW, uiChrome.defaultH
+	pcall(function()
+		if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile(uiChrome.sizePath) then
+			local raw = tostring(readfile(uiChrome.sizePath) or "")
+			local sw, sh = raw:match("^(%d+)[,%s]+(%d+)")
+			if sw and sh then
+				w = tonumber(sw) or w
+				h = tonumber(sh) or h
+			end
+		end
+	end)
+	local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+	local maxW = math.max(uiChrome.minW + 20, math.floor(vp.X - 36))
+	local maxH = math.max(uiChrome.minH + 20, math.floor(vp.Y - 48))
+	uiChrome.initW = math.clamp(math.round(w), uiChrome.minW, maxW)
+	uiChrome.initH = math.clamp(math.round(h), uiChrome.minH, maxH)
+	uiChrome.initY = math.clamp(math.floor((vp.Y - uiChrome.initH) * 0.5), 14, 56)
+end
+
+uiChrome.saveSize = function(w, h)
+	pcall(function()
+		if typeof(isfolder) == "function" and typeof(makefolder) == "function" and typeof(writefile) == "function" then
+			if not isfolder("StandOutHold") then makefolder("StandOutHold") end
+			writefile(uiChrome.sizePath, string.format("%d,%d", math.round(w), math.round(h)))
+		end
+	end)
+end
+
 local toggleBtn = Instance.new("TextButton")
-toggleBtn.Size              = UDim2.fromOffset(36, 36)
-toggleBtn.Position          = UDim2.new(1, -46, 0, 44)
+toggleBtn.Size              = UDim2.fromOffset(38, 38)
+toggleBtn.Position          = UDim2.new(1, -48, 0, 44)
 toggleBtn.Text              = "SO"
 toggleBtn.Font              = Enum.Font.GothamBold
 toggleBtn.TextSize          = 12
 toggleBtn.TextColor3        = C_TEXT
 toggleBtn.BackgroundColor3  = C_ACCENT
-toggleBtn.BackgroundTransparency = 0.1
+toggleBtn.BackgroundTransparency = 0.08
 toggleBtn.Visible           = false
 toggleBtn.Parent            = gui
-corner(toggleBtn, 18)
+corner(toggleBtn, 19)
+stroke(toggleBtn, C_TEXT, 1, 0.7)
 
 local main = Instance.new("Frame")
 main.Name             = "Main"
-main.Position         = UDim2.new(0.5, -245, 0.12, 0)
-main.Size             = UDim2.fromOffset(490, 516)
+main.Position         = UDim2.new(0.5, -math.floor(uiChrome.initW / 2), 0, uiChrome.initY)
+main.Size             = UDim2.fromOffset(uiChrome.initW, uiChrome.initH)
 main.BackgroundColor3 = C_BG
 main.BorderSizePixel  = 0
 main.ClipsDescendants = true
 main.Parent           = gui
 corner(main, 10)
-stroke(main, C_STROKE, 1, 0.25)
+stroke(main, C_STROKE, 1, 0.22)
 
 local header = Instance.new("Frame")
 header.Name             = "Header"
@@ -1359,73 +1402,103 @@ local headerCorner = Instance.new("UICorner")
 headerCorner.CornerRadius = UDim.new(0, 10)
 headerCorner.Parent = header
 
-local title = Instance.new("TextLabel")
-title.Text              = "Stand Out Dashboard"
-title.Font              = Enum.Font.GothamBold
-title.TextSize          = 14
-title.TextColor3        = C_TEXT
-title.BackgroundTransparency = 1
-title.Position          = UDim2.fromOffset(12, 0)
-title.Size              = UDim2.fromOffset(152, 38)
-title.TextXAlignment    = Enum.TextXAlignment.Left
-title.Active            = false
-title.ZIndex            = 10
-title.Parent            = header
+do
+	local headerDivider = Instance.new("Frame")
+	headerDivider.Position               = UDim2.new(0, 0, 1, -1)
+	headerDivider.Size                   = UDim2.new(1, 0, 0, 1)
+	headerDivider.BackgroundColor3       = C_STROKE
+	headerDivider.BackgroundTransparency = 0.45
+	headerDivider.BorderSizePixel        = 0
+	headerDivider.ZIndex                 = 11
+	headerDivider.Parent                 = header
 
-local verLabel = Instance.new("TextLabel")
-verLabel.Text              = "v63"
-verLabel.Font              = Enum.Font.Code
-verLabel.TextSize          = 11
-verLabel.TextColor3        = C_SUB
-verLabel.BackgroundTransparency = 1
-verLabel.Position          = UDim2.fromOffset(162, 1)
-verLabel.Size              = UDim2.fromOffset(26, 38)
-verLabel.TextXAlignment    = Enum.TextXAlignment.Left
-verLabel.Active            = false
-verLabel.ZIndex            = 10
-verLabel.Parent            = header
+	local title = Instance.new("TextLabel")
+	title.Text              = "Stand Out"
+	title.Font              = Enum.Font.GothamBold
+	title.TextSize          = 14
+	title.TextColor3        = C_TEXT
+	title.BackgroundTransparency = 1
+	title.Position          = UDim2.fromOffset(14, 0)
+	title.Size              = UDim2.fromOffset(82, 38)
+	title.TextXAlignment    = Enum.TextXAlignment.Left
+	title.Active            = false
+	title.ZIndex            = 10
+	title.Parent            = header
+
+	local verBadge = Instance.new("Frame")
+	verBadge.Position               = UDim2.fromOffset(92, 10)
+	verBadge.Size                   = UDim2.fromOffset(32, 18)
+	verBadge.BackgroundColor3       = C_PANEL
+	verBadge.BorderSizePixel        = 0
+	verBadge.ZIndex                 = 10
+	verBadge.Parent                 = header
+	corner(verBadge, 5)
+	stroke(verBadge, C_STROKE, 1, 0.45)
+
+	local verLabel = Instance.new("TextLabel")
+	verLabel.Text              = "v65"
+	verLabel.Font              = Enum.Font.Code
+	verLabel.TextSize          = 10
+	verLabel.TextColor3        = C_SUB
+	verLabel.BackgroundTransparency = 1
+	verLabel.Size              = UDim2.new(1, 0, 1, 0)
+	verLabel.Active            = false
+	verLabel.ZIndex            = 11
+	verLabel.Parent            = verBadge
+end
 
 local countLabel = Instance.new("TextLabel")
 countLabel.Text             = "0"
 countLabel.Font             = Enum.Font.GothamBold
-countLabel.TextSize         = 11
+countLabel.TextSize         = 10
 countLabel.TextColor3       = C_TEXT
 countLabel.BackgroundColor3 = C_ACCENT
 countLabel.BackgroundTransparency = 0.15
-countLabel.Size             = UDim2.fromOffset(65, 22)
-countLabel.Position         = UDim2.fromOffset(192, 8)
+countLabel.Size             = UDim2.fromOffset(65, 20)
+countLabel.Position         = UDim2.fromOffset(132, 9)
 countLabel.Active           = false
 countLabel.ZIndex           = 10
 countLabel.Parent           = header
 corner(countLabel, 6)
 
 local minBtn = Instance.new("TextButton")
-minBtn.Text              = "-"
+minBtn.Text              = "–"
 minBtn.Font              = Enum.Font.GothamBold
-minBtn.TextSize          = 24
+minBtn.TextSize          = 16
 minBtn.TextColor3        = C_SUB
+minBtn.BackgroundColor3  = C_PANEL
 minBtn.BackgroundTransparency = 1
-minBtn.Size              = UDim2.fromOffset(28, 28)
-minBtn.Position          = UDim2.new(1, -66, 0.5, -14)
+minBtn.BorderSizePixel   = 0
+minBtn.Size              = UDim2.fromOffset(26, 26)
+minBtn.Position          = UDim2.new(1, -64, 0.5, -13)
 minBtn.ZIndex            = 10
 minBtn.Parent            = header
+corner(minBtn, 6)
+minBtn.MouseEnter:Connect(function() minBtn.BackgroundTransparency = 0; minBtn.TextColor3 = C_TEXT end)
+minBtn.MouseLeave:Connect(function() minBtn.BackgroundTransparency = 1; minBtn.TextColor3 = C_SUB end)
 
 local closeBtn = Instance.new("TextButton")
 closeBtn.Text              = "×"
 closeBtn.Font              = Enum.Font.GothamBold
-closeBtn.TextSize          = 20
+closeBtn.TextSize          = 18
 closeBtn.TextColor3        = C_ERR
+closeBtn.BackgroundColor3  = C_PANEL
 closeBtn.BackgroundTransparency = 1
-closeBtn.Size              = UDim2.fromOffset(28, 28)
-closeBtn.Position          = UDim2.new(1, -34, 0.5, -14)
+closeBtn.BorderSizePixel   = 0
+closeBtn.Size              = UDim2.fromOffset(26, 26)
+closeBtn.Position          = UDim2.new(1, -34, 0.5, -13)
 closeBtn.ZIndex            = 10
 closeBtn.Parent            = header
+corner(closeBtn, 6)
+closeBtn.MouseEnter:Connect(function() closeBtn.BackgroundTransparency = 0 end)
+closeBtn.MouseLeave:Connect(function() closeBtn.BackgroundTransparency = 1 end)
 
 local tabBar = Instance.new("ScrollingFrame")
 tabBar.Name                  = "TabBar"
 tabBar.Position              = UDim2.fromOffset(0, 38)
-tabBar.Size                  = UDim2.new(0, 142, 1, -82)
-tabBar.BackgroundColor3      = C_BG
+tabBar.Size                  = UDim2.new(0, 142, 1, -38)
+tabBar.BackgroundColor3      = C_HEADER
+tabBar.BackgroundTransparency = 0.35
 tabBar.BorderSizePixel       = 0
 tabBar.ScrollBarThickness    = 2
 tabBar.ScrollBarImageColor3  = C_STROKE
@@ -1434,33 +1507,45 @@ tabBar.AutomaticCanvasSize   = Enum.AutomaticSize.Y
 tabBar.ScrollingDirection    = Enum.ScrollingDirection.Y
 tabBar.Parent                = main
 
-local tabList = Instance.new("UIListLayout")
-tabList.FillDirection       = Enum.FillDirection.Vertical
-tabList.HorizontalAlignment = Enum.HorizontalAlignment.Center
-tabList.VerticalAlignment   = Enum.VerticalAlignment.Top
-tabList.Padding             = UDim.new(0, 5)
-tabList.Parent              = tabBar
+do
+	local tabList = Instance.new("UIListLayout")
+	tabList.FillDirection       = Enum.FillDirection.Vertical
+	tabList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+	tabList.VerticalAlignment   = Enum.VerticalAlignment.Top
+	tabList.Padding             = UDim.new(0, 4)
+	tabList.Parent              = tabBar
 
-local tabPad = Instance.new("UIPadding")
-tabPad.PaddingTop    = UDim.new(0, 8)
-tabPad.PaddingBottom = UDim.new(0, 8)
-tabPad.Parent        = tabBar
+	local tabPad = Instance.new("UIPadding")
+	tabPad.PaddingTop    = UDim.new(0, 10)
+	tabPad.PaddingBottom = UDim.new(0, 10)
+	tabPad.Parent        = tabBar
+end
 
 local separator = Instance.new("Frame")
 separator.Size = UDim2.new(0, 1, 1, -38)
 separator.Position = UDim2.fromOffset(142, 38)
 separator.BackgroundColor3 = C_STROKE
-separator.BackgroundTransparency = 0.35
+separator.BackgroundTransparency = 0.45
 separator.BorderSizePixel = 0
 separator.Parent = main
 
 local footer = Instance.new("Frame")
 footer.Name                    = "Footer"
-footer.Position                = UDim2.new(0, 0, 1, -44)
-footer.Size                    = UDim2.new(1, 0, 0, 44)
-footer.BackgroundTransparency  = 1
+footer.Position                = UDim2.new(0, 143, 1, -44)
+footer.Size                    = UDim2.new(1, -143, 0, 44)
+footer.BackgroundColor3        = C_HEADER
+footer.BackgroundTransparency  = 0.55
 footer.BorderSizePixel         = 0
 footer.Parent                  = main
+
+do
+	local footerDiv = Instance.new("Frame")
+	footerDiv.Size                   = UDim2.new(1, 0, 0, 1)
+	footerDiv.BackgroundColor3       = C_STROKE
+	footerDiv.BackgroundTransparency = 0.5
+	footerDiv.BorderSizePixel        = 0
+	footerDiv.Parent                 = footer
+end
 
 local returnBtn = Instance.new("TextButton")
 returnBtn.Text             = "Return"
@@ -1469,11 +1554,43 @@ returnBtn.TextSize         = 12
 returnBtn.TextColor3       = C_TEXT
 returnBtn.BackgroundColor3 = C_PANEL
 returnBtn.BorderSizePixel  = 0
-returnBtn.Position         = UDim2.fromOffset(158, 7)
-returnBtn.Size             = UDim2.new(1, -174, 0, 30)
+returnBtn.Position         = UDim2.fromOffset(16, 7)
+returnBtn.Size             = UDim2.new(1, -42, 0, 30)
 returnBtn.Parent           = footer
 corner(returnBtn, 6)
 stroke(returnBtn, C_STROKE, 1, 0.35)
+returnBtn.MouseEnter:Connect(function() returnBtn.BackgroundColor3 = C_ROW_HOT end)
+returnBtn.MouseLeave:Connect(function() returnBtn.BackgroundColor3 = C_PANEL end)
+
+local resizeHandle = Instance.new("Frame")
+resizeHandle.Name                   = "ResizeHandle"
+resizeHandle.Position               = UDim2.new(1, -20, 1, -20)
+resizeHandle.Size                   = UDim2.fromOffset(20, 20)
+resizeHandle.BackgroundTransparency = 1
+resizeHandle.ZIndex                 = 40
+resizeHandle.Parent                 = main
+
+do
+	for idx, spec in ipairs({ {x = 12, y = 13, w = 5}, {x = 8, y = 16, w = 9} }) do
+		local bar = Instance.new("Frame")
+		bar.Size             = UDim2.fromOffset(spec.w, 2)
+		bar.Position         = UDim2.fromOffset(spec.x, spec.y)
+		bar.BackgroundColor3 = C_SUB
+		bar.BackgroundTransparency = 0.45
+		bar.BorderSizePixel  = 0
+		bar.ZIndex           = 41
+		bar.Parent           = resizeHandle
+		corner(bar, 1)
+		uiChrome.gripBars[idx] = bar
+	end
+	local gripHit = Instance.new("TextButton")
+	gripHit.Text                   = ""
+	gripHit.BackgroundTransparency = 1
+	gripHit.Size                   = UDim2.new(1, 0, 1, 0)
+	gripHit.ZIndex                 = 42
+	gripHit.Parent                 = resizeHandle
+	uiChrome.gripHit               = gripHit
+end
 
 --=====================================================================
 -- Dropdown / Slider / Toggle helpers
@@ -1838,45 +1955,46 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, yOffset, i
 	labelLbl.Parent = container
 
 	local sliderFrame = Instance.new("Frame")
-	sliderFrame.Size = UDim2.new(1, -74, 0, 20)
-	sliderFrame.Position = UDim2.new(0, 8, 0, 18)
+	sliderFrame.Size = UDim2.new(1, -72, 0, 20)
+	sliderFrame.Position = UDim2.new(0, 4, 0, 18)
 	sliderFrame.BackgroundTransparency = 1
 	sliderFrame.Parent = container
 
 	local track = Instance.new("Frame")
-	track.Size = UDim2.new(1, 0, 0, 6)
-	track.Position = UDim2.new(0, 0, 0.5, -3)
-	track.BackgroundColor3 = C_ROW
+	track.Size = UDim2.new(1, 0, 0, 4)
+	track.Position = UDim2.new(0, 0, 0.5, -2)
+	track.BackgroundColor3 = C_ROW_HOT
 	track.BorderSizePixel = 0
 	track.Parent = sliderFrame
-	corner(track, 3)
+	corner(track, 2)
 
 	local fill = Instance.new("Frame")
 	fill.Size = UDim2.new(0, 0, 1, 0)
 	fill.BackgroundColor3 = C_ACCENT
 	fill.BorderSizePixel = 0
 	fill.Parent = track
-	corner(fill, 3)
+	corner(fill, 2)
 
 	local thumb = Instance.new("Frame")
-	thumb.Size = UDim2.fromOffset(16, 16)
-	thumb.Position = UDim2.new(0, -8, 0.5, -8)
+	thumb.Size = UDim2.fromOffset(14, 14)
+	thumb.Position = UDim2.new(0, -7, 0.5, -7)
 	thumb.BackgroundColor3 = C_TEXT
 	thumb.BorderSizePixel = 0
 	thumb.Parent = sliderFrame
-	corner(thumb, 8)
+	corner(thumb, 7)
+	stroke(thumb, C_ACCENT, 1.5, 0.25)
 
 	local textBox = Instance.new("TextBox")
 	textBox.Size = UDim2.fromOffset(52, 24)
 	textBox.Position = UDim2.new(1, -52, 0, 16)
 	textBox.BackgroundColor3 = C_PANEL
 	textBox.TextColor3 = C_TEXT
-	textBox.Font = Enum.Font.Gotham
-	textBox.TextSize = 12
+	textBox.Font = Enum.Font.GothamBold
+	textBox.TextSize = 11
 	textBox.Text = isInt and string.format("%d", defaultVal) or string.format("%.1f", defaultVal)
 	textBox.Parent = container
-	corner(textBox, 4)
-	stroke(textBox, C_STROKE, 1, 0.35)
+	corner(textBox, 5)
+	stroke(textBox, C_STROKE, 1, 0.45)
 
 	local currentVal = defaultVal
 
@@ -1885,7 +2003,7 @@ local function buildSlider(parent, label, minVal, maxVal, defaultVal, yOffset, i
 		if isInt then currentVal = math.round(currentVal) end
 		local alpha = (currentVal - minVal) / (maxVal - minVal)
 		fill.Size = UDim2.new(alpha, 0, 1, 0)
-		thumb.Position = UDim2.new(alpha, -8, 0.5, -8)
+		thumb.Position = UDim2.new(alpha, -7, 0.5, -7)
 		textBox.Text = isInt and string.format("%d", currentVal) or string.format("%.1f", currentVal)
 		if onChange then onChange(currentVal) end
 	end
@@ -1971,34 +2089,47 @@ local function buildToggle(parent, label, yOffset, defaultState, onChange, allow
 	local container = Instance.new("Frame")
 	container.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 30)
 	container.Position = UDim2.fromOffset(PAGE_PAD_X, yOffset)
-	container.BackgroundTransparency = 1
+	container.BackgroundColor3 = C_PANEL
+	container.BackgroundTransparency = 0.35
+	container.BorderSizePixel = 0
 	container.Parent = parent
+	corner(container, 6)
+	stroke(container, C_STROKE, 1, 0.6)
+
+	container.MouseEnter:Connect(function()
+		container.BackgroundTransparency = 0.1
+	end)
+	container.MouseLeave:Connect(function()
+		container.BackgroundTransparency = 0.35
+	end)
 
 	local labelLbl = Instance.new("TextLabel")
 	labelLbl.Text = label
 	labelLbl.Font = Enum.Font.GothamBold
 	labelLbl.TextSize = 11
-	labelLbl.TextColor3 = C_SUB
+	labelLbl.TextColor3 = C_TEXT
 	labelLbl.BackgroundTransparency = 1
-	labelLbl.Size = UDim2.new(1, allowKeybind and -138 or -50, 1, 0)
+	labelLbl.Position = UDim2.fromOffset(10, 0)
+	labelLbl.Size = UDim2.new(1, allowKeybind and -142 or -58, 1, 0)
 	labelLbl.TextXAlignment = Enum.TextXAlignment.Left
+	labelLbl.TextTruncate = Enum.TextTruncate.AtEnd
 	labelLbl.Parent = container
 
 	local switchBg = Instance.new("Frame")
-	switchBg.Size = UDim2.fromOffset(40, 20)
-	switchBg.Position = allowKeybind and UDim2.new(1, -124, 0.5, -10) or UDim2.new(1, -40, 0.5, -10)
+	switchBg.Size = UDim2.fromOffset(36, 18)
+	switchBg.Position = allowKeybind and UDim2.new(1, -124, 0.5, -9) or UDim2.new(1, -44, 0.5, -9)
 	switchBg.BackgroundColor3 = defaultState and C_OK or C_ROW_HOT
 	switchBg.BorderSizePixel = 0
 	switchBg.Parent = container
-	corner(switchBg, 10)
+	corner(switchBg, 9)
 
 	local thumb = Instance.new("Frame")
-	thumb.Size = UDim2.fromOffset(16, 16)
-	thumb.Position = defaultState and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+	thumb.Size = UDim2.fromOffset(14, 14)
+	thumb.Position = defaultState and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
 	thumb.BackgroundColor3 = C_TEXT
 	thumb.BorderSizePixel = 0
 	thumb.Parent = switchBg
-	corner(thumb, 8)
+	corner(thumb, 7)
 
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(1, 0, 1, 0)
@@ -2011,7 +2142,7 @@ local function buildToggle(parent, label, yOffset, defaultState, onChange, allow
 		state = newState
 		switchBg.BackgroundColor3 = state and C_OK or C_ROW_HOT
 		TweenService:Create(thumb, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Position = state and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+			Position = state and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
 		}):Play()
 		if onChange then onChange(state) end
 	end
@@ -2022,10 +2153,11 @@ local function buildToggle(parent, label, yOffset, defaultState, onChange, allow
 
 	local kbEntry = nil
 	if allowKeybind then
+		switchBg.Position = UDim2.new(1, -126, 0.5, -9)
 		local kbBtn = Instance.new("TextButton")
-		kbBtn.Size = UDim2.fromOffset(76, 22)
-		kbBtn.Position = UDim2.new(1, -76, 0.5, -11)
-		kbBtn.BackgroundColor3 = C_PANEL
+		kbBtn.Size = UDim2.fromOffset(74, 22)
+		kbBtn.Position = UDim2.new(1, -82, 0.5, -11)
+		kbBtn.BackgroundColor3 = C_HEADER
 		kbBtn.BorderSizePixel = 0
 		kbBtn.Font = Enum.Font.GothamBold
 		kbBtn.TextSize = 10
@@ -2219,6 +2351,130 @@ local autoCollectState = {
 	lockedBargeCF    = nil,
 	returnedToOrigin = false,
 }
+
+--=====================================================================
+-- Unified Auto-Farm Priority Coordinator (Bosses / AutoCollect / Eliminations)
+--=====================================================================
+;(function()
+	local DEFAULT_ORDER = { "Bosses", "AutoCollect", "Eliminations" }
+	local VALID_KEYS = { Bosses = true, AutoCollect = true, Eliminations = true }
+
+	local coordinator = {
+		order        = { "Bosses", "AutoCollect", "Eliminations" },
+		handlers     = {},
+		currentOwner = nil,
+		lastResolve  = 0,
+	}
+
+	appMod.farmPriority = coordinator
+
+	appMod.registerFarmHandler = function(key, def)
+		if VALID_KEYS[key] and type(def) == "table" then
+			coordinator.handlers[key] = def
+		end
+	end
+
+	appMod.getActiveFarmOwner = function(force)
+		local now = os.clock()
+		if not force and (now - (coordinator.lastResolve or 0)) < 0.12 then
+			return coordinator.currentOwner
+		end
+		coordinator.lastResolve = now
+
+		local desired = nil
+		for _, key in ipairs(coordinator.order) do
+			local h = coordinator.handlers[key]
+			if h and type(h.isEnabled) == "function" and h.isEnabled() then
+				local okW, hasW = true, true
+				if type(h.hasWork) == "function" then
+					okW, hasW = pcall(h.hasWork)
+				end
+				if okW and hasW == true then
+					desired = key
+					break
+				end
+			end
+		end
+
+		if desired ~= coordinator.currentOwner then
+			local oldKey = coordinator.currentOwner
+			coordinator.currentOwner = desired
+			if oldKey then
+				local oldH = coordinator.handlers[oldKey]
+				if oldH and type(oldH.onYield) == "function" then
+					pcall(oldH.onYield)
+				end
+			end
+			task.defer(function()
+				if appMod.refreshPriorityUI then appMod.refreshPriorityUI() end
+				if updateCountLabel then updateCountLabel() end
+			end)
+		end
+
+		return coordinator.currentOwner
+	end
+
+	appMod.isFarmOwner = function(key)
+		return appMod.getActiveFarmOwner(false) == key
+	end
+
+	appMod.hasOtherRunningFarm = function(excludeKey)
+		for _, key in ipairs(coordinator.order) do
+			if key ~= excludeKey then
+				local h = coordinator.handlers[key]
+				if h and type(h.isEnabled) == "function" and h.isEnabled() then
+					return true
+				end
+			end
+		end
+		return false
+	end
+
+	appMod.setFarmOrder = function(newOrder)
+		if type(newOrder) ~= "table" then return end
+		local clean, seen = {}, {}
+		for _, k in ipairs(newOrder) do
+			if VALID_KEYS[k] and not seen[k] then
+				seen[k] = true
+				table.insert(clean, k)
+			end
+		end
+		for _, k in ipairs(DEFAULT_ORDER) do
+			if not seen[k] then
+				seen[k] = true
+				table.insert(clean, k)
+			end
+		end
+		coordinator.order = clean
+		appMod.getActiveFarmOwner(true)
+		if appMod.refreshPriorityUI then appMod.refreshPriorityUI() end
+	end
+
+	appMod.moveFarmPriority = function(key, delta)
+		local idx
+		for i, k in ipairs(coordinator.order) do
+			if k == key then idx = i; break end
+		end
+		if not idx then return end
+		local targetIdx = idx + delta
+		if targetIdx < 1 or targetIdx > #coordinator.order then return end
+		coordinator.order[idx], coordinator.order[targetIdx] = coordinator.order[targetIdx], coordinator.order[idx]
+		appMod.getActiveFarmOwner(true)
+		if appMod.refreshPriorityUI then appMod.refreshPriorityUI() end
+	end
+
+	appMod.setAllFarmsRunning = function(shouldRun)
+		shouldRun = (shouldRun == true)
+		for _, key in ipairs(coordinator.order) do
+			local h = coordinator.handlers[key]
+			if h and type(h.setEnabled) == "function" then
+				pcall(h.setEnabled, shouldRun)
+			end
+		end
+		appMod.getActiveFarmOwner(true)
+		if appMod.refreshPriorityUI then appMod.refreshPriorityUI() end
+	end
+end)()
 
 --=====================================================================
 -- Tabbed-Out Safe Interact: Prompts + ClickDetectors + Remotes
@@ -2624,6 +2880,9 @@ local function getPriorityCache()
 end
 
 local function shouldPreempt(currentPriority, currentItem)
+	if appMod.isFarmOwner and not appMod.isFarmOwner("AutoCollect") then
+		return true, nil, "Priority"
+	end
 	local cache = getPriorityCache()
 	if cache.prio < currentPriority and cache.item ~= currentItem then
 		return true, cache.item, cache.catName
@@ -2898,6 +3157,33 @@ local function getStandActorModel()
 	return (val and val:IsA("ObjectValue")) and val.Value or nil
 end
 
+local function isStandProperlySummoned(char)
+	local standName = getEquippedStandName()
+	if standName == "" then return true, nil end
+	if not char or not char.Parent then return false, nil end
+	if char:GetAttribute("Summoned") ~= true then return false, nil end
+
+	local ctrl = getPlayerController()
+	if ctrl and type(ctrl.getStates) == "function" then
+		local okS, states = pcall(ctrl.getStates, ctrl)
+		if okS and type(states) == "table" and states.Summoned ~= true then
+			return false, nil
+		end
+	end
+
+	local standObj = getStandActorModel()
+	if not standObj or standObj:GetAttribute("StandReady") ~= true then
+		return false, standObj
+	end
+
+	local fadeTarget = standObj:GetAttribute("LocalFadeTarget")
+	if type(fadeTarget) == "number" and fadeTarget > 0.1 then
+		return false, standObj
+	end
+
+	return true, standObj
+end
+
 local function ensureStandReadyForBarge(char, hrp)
 	local standName = getEquippedStandName()
 	if standName == "" then return false, nil end
@@ -2911,26 +3197,47 @@ local function ensureStandReadyForBarge(char, hrp)
 		if sHrp and (sHrp.Position - hrp.Position).Magnitude > 30 then
 			local tWait = os.clock()
 			while (sHrp.Position - hrp.Position).Magnitude > 30 and os.clock() - tWait < 0.35 do
-				task.wait(0.05)
+				task.wait(0.04)
 			end
 			if (sHrp.Position - hrp.Position).Magnitude > 30 and combatRemote and combatRemote:IsA("RemoteEvent") then
 				pcall(function() combatRemote.FireServer(combatRemote, "Summon", false) end)
-				task.wait(0.25)
+				task.wait(0.22)
 			end
 		end
 	end
 
-	if char:GetAttribute("Summoned") ~= true and combatRemote and combatRemote:IsA("RemoteEvent") then
-		pcall(function() combatRemote.FireServer(combatRemote, "Summon", true) end)
-		local t0 = os.clock()
-		while char:GetAttribute("Summoned") ~= true and os.clock() - t0 < 1.2 do
-			task.wait(0.05)
-		end
-		task.wait(0.2)
+	local alreadyOut, readyObj = isStandProperlySummoned(char)
+	if alreadyOut then
+		return true, readyObj
 	end
 
-	standObj = getStandActorModel()
-	return (char:GetAttribute("Summoned") == true), standObj
+	local ctrl = getPlayerController()
+	if ctrl and type(ctrl.summonStand) == "function" then
+		pcall(function() ctrl:summonStand(true) end)
+	end
+	if char:GetAttribute("Summoned") ~= true and combatRemote and combatRemote:IsA("RemoteEvent") then
+		pcall(function() combatRemote.FireServer(combatRemote, "Summon", true) end)
+	end
+
+	local t0 = os.clock()
+	local retriedCtrl = false
+	while os.clock() - t0 < 1.5 do
+		local okOut, curObj = isStandProperlySummoned(char)
+		if okOut then
+			return true, curObj
+		end
+		if not retriedCtrl and (os.clock() - t0) >= 0.45 then
+			retriedCtrl = true
+			ctrl = getPlayerController()
+			if ctrl and type(ctrl.summonStand) == "function" then
+				pcall(function() ctrl:summonStand(true) end)
+			end
+		end
+		task.wait(0.04)
+	end
+
+	local finalOk, finalObj = isStandProperlySummoned(char)
+	return finalOk, finalObj or getStandActorModel()
 end
 
 local function buildDynamicHeavyPayload(char, token, standObj)
@@ -3282,6 +3589,53 @@ end
 --=====================================================================
 local lastLoopFast = false
 
+local function hasAvailableCollectTarget()
+	if not autoCollectState.running then return false end
+	if getPriorityCache().item ~= nil then
+		return true
+	end
+	if autoCollectState.targets["Scrap Barges"]
+		and (not appMod.shouldTryBarge or appMod.shouldTryBarge()) then
+		for _, item in ipairs(getItemsForCategory("Scrap Barges")) do
+			if not autoCollectState.collected[item] and item:IsDescendantOf(workspace) then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function yieldAutoCollectControl()
+	if autoCollectState.cancelMove then
+		autoCollectState.cancelMove()
+		autoCollectState.cancelMove = nil
+	end
+	clearTweenVisuals()
+	autoCollectState.lockedBarge   = nil
+	autoCollectState.lockedBargeCF = nil
+	autoCollectState.busy          = false
+	autoCollectState.busyBarge     = false
+	local c = LocalPlayer.Character
+	local h = c and c:FindFirstChild("HumanoidRootPart")
+	if h then h.Anchored = false end
+	local ctrl, u69 = getPlayerController()
+	if ctrl then
+		resetStuckCombatStates(ctrl, u69)
+	end
+end
+
+if appMod.registerFarmHandler then
+	appMod.registerFarmHandler("AutoCollect", {
+		label     = "Auto Collect (Items / Barges)",
+		isEnabled = function() return autoCollectState.running == true end,
+		setEnabled = function(s)
+			if autoCollectState.setRunning then autoCollectState.setRunning(s) end
+		end,
+		hasWork   = hasAvailableCollectTarget,
+		onYield   = yieldAutoCollectControl,
+	})
+end
+
 task.spawn(function()
 	while true do
 		if not isInstanceAlive() then return end
@@ -3289,6 +3643,28 @@ task.spawn(function()
 			autoCollectState.busy = false
 			task.wait(0.15)
 			continue
+		end
+
+		if appMod.isFarmOwner and not appMod.isFarmOwner("AutoCollect") then
+			local owner = appMod.getActiveFarmOwner()
+			if owner then
+				if autoCollectState.busy or autoCollectState.busyBarge then
+					yieldAutoCollectControl()
+				end
+				if autoCollectState.statusTab and autoCollectState.statusTab.status then
+					autoCollectState.statusTab.status.Text = "Yielded to " .. tostring(owner)
+					autoCollectState.statusTab.status.TextColor3 = C_WARN
+				end
+				task.wait(0.15)
+				continue
+			elseif appMod.hasOtherRunningFarm and appMod.hasOtherRunningFarm("AutoCollect") then
+				if autoCollectState.statusTab and autoCollectState.statusTab.status then
+					autoCollectState.statusTab.status.Text = "Waiting for items..."
+					autoCollectState.statusTab.status.TextColor3 = C_SUB
+				end
+				task.wait(0.2)
+				continue
+			end
 		end
 
 		local ok, err = pcall(function()
@@ -3331,7 +3707,9 @@ task.spawn(function()
 				if hrp and hrp.Parent then hrp.Anchored = false end
 
 				local origin = savedPosition or autoCollectState.originCFrame
-				if origin and hrp and hrp.Parent and not autoCollectState.returnedToOrigin then
+				local otherFarmActive = appMod.hasOtherRunningFarm and appMod.hasOtherRunningFarm("AutoCollect")
+				local hideActive = appMod.isHideWhileWaitingEnabled and appMod.isHideWhileWaitingEnabled()
+				if origin and hrp and hrp.Parent and not autoCollectState.returnedToOrigin and not otherFarmActive and not hideActive then
 					if (hrp.Position - origin.Position).Magnitude > 15 then
 						if autoCollectState.statusTab and autoCollectState.statusTab.status then
 							autoCollectState.statusTab.status.Text = "Returning to origin..."
@@ -3635,9 +4013,7 @@ tabs = {
 		getContainer = function() return scrapBeaconFolder end, },
 	{ name = "World Events", emptyText = "No world event drops found.", autoHighlight = false, notify = true,
 		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("WorldEventDrops") end, },
-	{ name = "Spawned Bosses", isBosses = true, isCustom = true, },
-	{ name = "Auto Collect", isAutoCollect = true, isCustom = true, },
-	{ name = "Eliminations", isEliminations = true, isCustom = true, },
+	{ name = "Auto Farm", isAutoFarm = true, isCustom = true, },
 	{ name = "Miscellaneous", isMisc = true, isCustom = true, },
 	{ name = "Configs", isConfigs = true, isCustom = true, },
 }
@@ -3648,13 +4024,42 @@ local function buildTabBtn(tab, index, parentFrame)
 	btn.Font             = Enum.Font.Gotham
 	btn.TextSize         = 12
 	btn.TextColor3       = C_SUB
-	btn.BackgroundColor3 = C_BG
+	btn.BackgroundColor3 = C_HEADER
+	btn.BackgroundTransparency = 1
 	btn.BorderSizePixel  = 0
 	btn.LayoutOrder      = index
-	btn.TextXAlignment   = Enum.TextXAlignment.Center
-	btn.Size             = UDim2.new(1, -36, 0, 26)
+	btn.TextXAlignment   = Enum.TextXAlignment.Left
+	btn.Size             = UDim2.new(1, -16, 0, 30)
+	btn.TextTruncate     = Enum.TextTruncate.AtEnd
 	btn.Parent           = parentFrame
 	corner(btn, 6)
+
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 12)
+	pad.PaddingRight = UDim.new(0, 8)
+	pad.Parent = btn
+
+	local bar = Instance.new("Frame")
+	bar.Name                   = "ActiveBar"
+	bar.Size                   = UDim2.fromOffset(3, 16)
+	bar.Position               = UDim2.new(0, -10, 0.5, -8)
+	bar.BackgroundColor3       = C_ACCENT
+	bar.BorderSizePixel        = 0
+	bar.Visible                = false
+	bar.Parent                 = btn
+	corner(bar, 2)
+	tab.activeBar = bar
+
+	btn.MouseEnter:Connect(function()
+		if activeTab ~= tab then
+			btn.BackgroundTransparency = 0.45
+		end
+	end)
+	btn.MouseLeave:Connect(function()
+		if activeTab ~= tab then
+			btn.BackgroundTransparency = 1
+		end
+	end)
 	return btn
 end
 
@@ -3730,8 +4135,8 @@ local function buildTabBody(tab, parentFrame)
 	scroll.Size                  = UDim2.new(1, PAGE_WIDTH_OFFSET, 1, -106)
 	scroll.BackgroundTransparency= 1
 	scroll.BorderSizePixel       = 0
-	scroll.ScrollBarThickness    = 5
-	scroll.ScrollBarImageColor3  = Color3.fromRGB(90, 96, 110)
+	scroll.ScrollBarThickness    = 3
+	scroll.ScrollBarImageColor3  = C_STROKE
 	scroll.AutomaticCanvasSize   = Enum.AutomaticSize.Y
 	scroll.CanvasSize            = UDim2.new()
 	scroll.Parent                = body
@@ -3768,61 +4173,72 @@ end
 local configControls = {}
 
 local function buildMiscBody(tab, parentFrame)
-	local body = Instance.new("Frame")
+	local body = Instance.new("ScrollingFrame")
 	body.Position              = UDim2.fromOffset(143, 38)
 	body.Size                  = UDim2.new(1, -143, 1, -82)
 	body.BackgroundTransparency= 1
+	body.BorderSizePixel       = 0
+	body.ScrollBarThickness    = 3
+	body.ScrollBarImageColor3  = C_STROKE
+	body.AutomaticCanvasSize   = Enum.AutomaticSize.Y
+	body.CanvasSize            = UDim2.new()
 	body.Visible               = false
 	body.Parent                = parentFrame
+
+	local miscSpacer = Instance.new("Frame")
+	miscSpacer.BackgroundTransparency = 1
+	miscSpacer.Position = UDim2.fromOffset(0, 392)
+	miscSpacer.Size = UDim2.new(1, 0, 0, 14)
+	miscSpacer.Parent = body
 
 	local lblVisuals = Instance.new("TextLabel")
 	lblVisuals.Text = "Visuals"
 	lblVisuals.Font = Enum.Font.GothamBold
-	lblVisuals.TextSize = 12
+	lblVisuals.TextSize = 11
 	lblVisuals.TextColor3 = C_ACCENT_SOFT
 	lblVisuals.BackgroundTransparency = 1
-	lblVisuals.Position = UDim2.fromOffset(PAGE_PAD_X, 10)
-	lblVisuals.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 20)
+	lblVisuals.Position = UDim2.fromOffset(PAGE_PAD_X, 12)
+	lblVisuals.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 18)
 	lblVisuals.TextXAlignment = Enum.TextXAlignment.Left
 	lblVisuals.Parent = body
 
-	configControls.esp = buildToggle(body, "Player ESP", 35, false, function(state)
+	configControls.esp = buildToggle(body, "Player ESP", 34, false, function(state)
 		espEnabled = state
 		updateESP()
 	end, true)
 
-	configControls.espDistance = buildToggle(body, "ESP Distance", 75, false, function(state)
+	configControls.espDistance = buildToggle(body, "ESP Distance", 70, false, function(state)
 		showEspDistance = state
 	end, true)
 
 	local lblMove = Instance.new("TextLabel")
 	lblMove.Text = "Movement"
 	lblMove.Font = Enum.Font.GothamBold
-	lblMove.TextSize = 12
+	lblMove.TextSize = 11
 	lblMove.TextColor3 = C_ACCENT_SOFT
 	lblMove.BackgroundTransparency = 1
-	lblMove.Position = UDim2.fromOffset(PAGE_PAD_X, 125)
-	lblMove.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 20)
+	lblMove.Position = UDim2.fromOffset(PAGE_PAD_X, 114)
+	lblMove.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 18)
 	lblMove.TextXAlignment = Enum.TextXAlignment.Left
 	lblMove.Parent = body
 
-	configControls.fly = buildToggle(body, "Fly (WASD + Space/Shift)", 150, false, function(state)
+	configControls.fly = buildToggle(body, "Fly (WASD + Space/Shift)", 136, false, function(state)
 		toggleFly(state)
 	end, true)
 
-	configControls.flySpeed = buildSlider(body, "Fly Speed", 10, 500, 50, 190, true, function(val)
+	configControls.flySpeed = buildSlider(body, "Fly Speed", 10, 500, 50, 174, true, function(val)
 		flySpeed = val
 	end)
 
-	configControls.noclip = buildToggle(body, "Noclip", 250, false, function(state)
+	configControls.noclip = buildToggle(body, "Noclip", 232, false, function(state)
 		toggleNoclip(state)
 	end, true)
 
-	configControls.walkspeed = buildToggle(body, "Walkspeed", 290, false, function(state)
+	configControls.walkspeed = buildToggle(body, "Walkspeed", 268, false, function(state)
 		toggleWalkspeed(state)
 	end, true)
 
-	configControls.wsSpeed = buildSlider(body, "Walkspeed Value", 16, 300, 16, 330, true, function(val)
+	configControls.wsSpeed = buildSlider(body, "Walkspeed Value", 16, 300, 16, 306, true, function(val)
 		wsSpeed = val
 	end)
 
@@ -3897,9 +4313,69 @@ local function applyEcoRuntimeSettings()
 	pcall(function() LightingService.GlobalShadows = false end)
 end
 
+local function ensureOrigGfxBaseline(ugs, renderSettings, terrain)
+	if type(_G.StandOut_OrigGfx) == "table" then
+		return _G.StandOut_OrigGfx
+	end
+	local base = {
+		qualityLevel  = Enum.QualityLevel.Automatic,
+		savedQuality  = Enum.SavedQualitySetting.Automatic,
+		masterVolume  = 0.5,
+		globalShadows = true,
+		terrain       = {
+			WaterWaveSize     = 0.15,
+			WaterWaveSpeed    = 10,
+			WaterReflectance  = 1,
+			WaterTransparency = 0.3,
+			Decoration        = true,
+		},
+	}
+	if renderSettings then
+		pcall(function()
+			if renderSettings.QualityLevel ~= Enum.QualityLevel.Level01 then
+				base.qualityLevel = renderSettings.QualityLevel
+			end
+		end)
+	end
+	if ugs then
+		pcall(function()
+			if ugs.SavedQualityLevel ~= Enum.SavedQualitySetting.QualityLevel1 then
+				base.savedQuality = ugs.SavedQualityLevel
+			end
+			if ugs.MasterVolume and ugs.MasterVolume > 0.01 then
+				base.masterVolume = ugs.MasterVolume
+			end
+		end)
+	end
+	pcall(function()
+		if LightingService.GlobalShadows then
+			base.globalShadows = true
+		end
+	end)
+	if terrain then
+		pcall(function()
+			if terrain.Decoration or terrain.WaterWaveSize > 0 then
+				base.terrain = {
+					WaterWaveSize     = terrain.WaterWaveSize,
+					WaterWaveSpeed    = terrain.WaterWaveSpeed,
+					WaterReflectance  = terrain.WaterReflectance,
+					WaterTransparency = terrain.WaterTransparency,
+					Decoration        = terrain.Decoration,
+				}
+			end
+		end)
+	end
+	_G.StandOut_OrigGfx = base
+	return base
+end
+
 local function toggleEcoMode(state)
-	if state == ecoState.enabled then return end
-	ecoState.enabled = (state == true)
+	state = (state == true)
+	if state and ecoState.enabled then
+	
+		return
+	end
+	ecoState.enabled = state
 
 	local ugs
 	pcall(function() ugs = UserSettings():GetService("UserGameSettings") end)
@@ -3910,6 +4386,7 @@ local function toggleEcoMode(state)
 		end
 	end)
 	local terrain = workspace:FindFirstChildOfClass("Terrain")
+	local baseGfx = ensureOrigGfxBaseline(ugs, renderSettings, terrain)
 
 	if ecoState.enabled then
 		-- 1. Save & limit FPS to 15 (avoid capturing leftover 15 FPS from server hops)
@@ -3933,38 +4410,32 @@ local function toggleEcoMode(state)
 		-- 2. Drop Rendering Quality & SavedQualityLevel to lowest
 		if renderSettings then
 			pcall(function()
-				ecoState.origQualityLevel = renderSettings.QualityLevel
+				ecoState.origQualityLevel = baseGfx.qualityLevel
 				renderSettings.QualityLevel = Enum.QualityLevel.Level01
 			end)
 		end
 		if ugs then
 			pcall(function()
-				ecoState.origSavedQuality = ugs.SavedQualityLevel
+				ecoState.origSavedQuality = baseGfx.savedQuality
 				ugs.SavedQualityLevel = Enum.SavedQualitySetting.QualityLevel1
 			end)
 			-- 3. Mute audio across background instances
 			pcall(function()
-				ecoState.origMasterVolume = ugs.MasterVolume
+				ecoState.origMasterVolume = baseGfx.masterVolume
 				ugs.MasterVolume = 0
 			end)
 		end
 
 		-- 4. Disable shadows & post-effects
 		pcall(function()
-			ecoState.origGlobalShadows = LightingService.GlobalShadows
+			ecoState.origGlobalShadows = baseGfx.globalShadows
 			LightingService.GlobalShadows = false
 		end)
 
 		-- 5. Flatten terrain water & grass decoration
 		if terrain then
 			pcall(function()
-				ecoState.origTerrain = {
-					WaterWaveSize = terrain.WaterWaveSize,
-					WaterWaveSpeed = terrain.WaterWaveSpeed,
-					WaterReflectance = terrain.WaterReflectance,
-					WaterTransparency = terrain.WaterTransparency,
-					Decoration = terrain.Decoration,
-				}
+				ecoState.origTerrain = baseGfx.terrain
 				terrain.WaterWaveSize = 0
 				terrain.WaterWaveSpeed = 0
 				terrain.WaterReflectance = 0
@@ -3995,30 +4466,36 @@ local function toggleEcoMode(state)
 			ecoState.descConn = nil
 		end
 
+		local restoreCap = math.max(60, tonumber(ecoState.origFpsCap or _G.StandOut_OrigFpsCap or 60) or 60)
 		if typeof(setfpscap) == "function" then
-			pcall(setfpscap, ecoState.origFpsCap or 60)
+			pcall(setfpscap, restoreCap)
 		end
-		if renderSettings and ecoState.origQualityLevel ~= nil then
-			pcall(function() renderSettings.QualityLevel = ecoState.origQualityLevel end)
+		local qLvl = ecoState.origQualityLevel or baseGfx.qualityLevel
+		if renderSettings and qLvl ~= nil then
+			pcall(function() renderSettings.QualityLevel = qLvl end)
 		end
 		if ugs then
-			if ecoState.origSavedQuality ~= nil then
-				pcall(function() ugs.SavedQualityLevel = ecoState.origSavedQuality end)
+			local sqLvl = ecoState.origSavedQuality or baseGfx.savedQuality
+			if sqLvl ~= nil then
+				pcall(function() ugs.SavedQualityLevel = sqLvl end)
 			end
-			if ecoState.origMasterVolume ~= nil then
-				pcall(function() ugs.MasterVolume = ecoState.origMasterVolume end)
+			local mVol = ecoState.origMasterVolume or baseGfx.masterVolume
+			if mVol ~= nil then
+				pcall(function() ugs.MasterVolume = mVol end)
 			end
 		end
-		if ecoState.origGlobalShadows ~= nil then
-			pcall(function() LightingService.GlobalShadows = ecoState.origGlobalShadows end)
+		local gs = (ecoState.origGlobalShadows ~= nil) and ecoState.origGlobalShadows or baseGfx.globalShadows
+		if gs ~= nil then
+			pcall(function() LightingService.GlobalShadows = gs end)
 		end
-		if terrain and ecoState.origTerrain then
+		local ter = ecoState.origTerrain or baseGfx.terrain
+		if terrain and ter then
 			pcall(function()
-				terrain.WaterWaveSize = ecoState.origTerrain.WaterWaveSize
-				terrain.WaterWaveSpeed = ecoState.origTerrain.WaterWaveSpeed
-				terrain.WaterReflectance = ecoState.origTerrain.WaterReflectance
-				terrain.WaterTransparency = ecoState.origTerrain.WaterTransparency
-				terrain.Decoration = ecoState.origTerrain.Decoration
+				terrain.WaterWaveSize = ter.WaterWaveSize
+				terrain.WaterWaveSpeed = ter.WaterWaveSpeed
+				terrain.WaterReflectance = ter.WaterReflectance
+				terrain.WaterTransparency = ter.WaterTransparency
+				terrain.Decoration = ter.Decoration
 			end)
 		end
 		for inst, origEn in pairs(ecoState.origEffects) do
@@ -4028,6 +4505,7 @@ local function toggleEcoMode(state)
 		end
 		table.clear(ecoState.origEffects)
 	end
+
 end
 
 local no3dSessionGen = 0
@@ -4056,7 +4534,236 @@ local function toggleNo3DRender(state)
 			end)
 		end
 	end
+
 end
+
+appMod.toggleEcoMode = toggleEcoMode
+appMod.toggleNo3DRender = toggleNo3DRender
+appMod.setAutoPlayMenu = function(state)
+	autoCollectState.autoPlay = (state == true)
+	pcall(function()
+		if typeof(isfolder) == "function" and typeof(makefolder) == "function" and typeof(writefile) == "function" then
+			if not isfolder("StandOutHold") then makefolder("StandOutHold") end
+			writefile("StandOutHold/_autoplay_menu.txt", (state == true) and "1" or "0")
+		end
+	end)
+end
+appMod.resetFpsCap = function()
+	_G.StandOut_OrigFpsCap = 60
+	ecoState.origFpsCap = 60
+	if configControls.ecoMode and configControls.ecoMode.getState() then
+		configControls.ecoMode.setState(false)
+	else
+		toggleEcoMode(false)
+	end
+	if typeof(setfpscap) == "function" then
+		pcall(setfpscap, 60)
+	end
+
+end
+
+-- Auto Cloak (Vampire Protection) & Hide While Waiting
+;(function()
+	local HttpService = game:GetService("HttpService")
+	local autoCloakEnabled = false
+	local lastCloakUseAt = 0
+
+	local hideWaitingEnabled = false
+	local currentlyHiding = false
+	local savedSurfaceCF = nil
+	local HIDE_POS = Vector3.new(-1060, -81.5, 2100)
+	local HIDE_FLOOR_Y = -85.5
+	local HIDE_ROOF_Y = -70.0
+
+	local function isCloakCurrentlyWorn(char)
+		local iw = char and char:FindFirstChild("InventoryWearables")
+		if not iw then return false end
+		for _, child in ipairs(iw:GetChildren()) do
+			if child:GetAttribute("InventoryItemName") == "Cloak" or child.Name == "Cloak" then
+				return true
+			end
+		end
+		return iw:FindFirstChild("Cloak", true) ~= nil
+	end
+
+	local function searchCloakInJsonList(raw)
+		if type(raw) ~= "string" or raw == "" then return nil end
+		local ok, arr = pcall(HttpService.JSONDecode, HttpService, raw)
+		if not ok or type(arr) ~= "table" then return nil end
+		for _, v in ipairs(arr) do
+			if type(v) == "table" and (v.Name == "Cloak" or v.BaseItem == "Cloak") and v.ID then
+				return { Name = v.Name, ID = v.ID }
+			end
+		end
+		return nil
+	end
+
+	local function findCloakEntry(char)
+		local data = LocalPlayer:FindFirstChild("Data")
+		local stats = data and data:FindFirstChild("Stats")
+		if stats then
+			local qs = stats:FindFirstChild("QuickUseSlots")
+			local found = qs and qs:IsA("StringValue") and searchCloakInJsonList(qs.Value)
+			if found then return found end
+			local inv = stats:FindFirstChild("Inventory")
+			found = inv and inv:IsA("StringValue") and searchCloakInJsonList(inv.Value)
+			if found then return found end
+		end
+		local heldRaw = char and char:GetAttribute("QuickUseHeldItem")
+		if type(heldRaw) == "string" and heldRaw ~= "" then
+			local ok, tbl = pcall(HttpService.JSONDecode, HttpService, heldRaw)
+			if ok and type(tbl) == "table" and tbl.Name == "Cloak" and tbl.ID then
+				return { Name = tbl.Name, ID = tbl.ID }
+			end
+		end
+		return nil
+	end
+
+	local function equipCloakOnce(char)
+		local rems = ReplicatedStorage:FindFirstChild("Remotes")
+		local itemRemote = rems and rems:FindFirstChild("Item")
+		local entry = findCloakEntry(char)
+		if entry and itemRemote and itemRemote:IsA("RemoteEvent") then
+			pcall(function()
+				itemRemote.FireServer(itemRemote, "Use", entry.Name, entry.ID)
+			end)
+			return true
+		end
+		return false
+	end
+
+	local function cleanupHidePlatforms()
+		local fl = workspace:FindFirstChild("_SIM_HidePlatform")
+		if fl then fl:Destroy() end
+		local rf = workspace:FindFirstChild("_SIM_HideRoof")
+		if rf then rf:Destroy() end
+	end
+
+	local function ensureHidePlatforms()
+		local fl = workspace:FindFirstChild("_SIM_HidePlatform")
+		if not fl or not fl:IsA("BasePart") then
+			if fl then fl:Destroy() end
+			fl = Instance.new("Part")
+			fl.Name = "_SIM_HidePlatform"
+			fl.Anchored = true
+			fl.CanCollide = true
+			fl.CastShadow = true
+			fl.Material = Enum.Material.SmoothPlastic
+			fl.Color = Color3.fromRGB(22, 24, 30)
+			fl.Transparency = 0.35
+			fl.Size = Vector3.new(28, 2, 28)
+			fl.CFrame = CFrame.new(HIDE_POS.X, HIDE_FLOOR_Y, HIDE_POS.Z)
+			fl.Parent = workspace
+		end
+		local rf = workspace:FindFirstChild("_SIM_HideRoof")
+		if not rf or not rf:IsA("BasePart") then
+			if rf then rf:Destroy() end
+			rf = Instance.new("Part")
+			rf.Name = "_SIM_HideRoof"
+			rf.Anchored = true
+			rf.CanCollide = false
+			rf.CastShadow = true
+			rf.Material = Enum.Material.SmoothPlastic
+			rf.Color = Color3.fromRGB(16, 18, 22)
+			rf.Transparency = 0
+			rf.Size = Vector3.new(34, 4, 34)
+			rf.CFrame = CFrame.new(HIDE_POS.X, HIDE_ROOF_Y, HIDE_POS.Z)
+			rf.Parent = workspace
+		end
+	end
+
+	local function hasAnyRunningFarm()
+		if autoCollectState.running then return true end
+		if appMod.isBossFarmRunning and appMod.isBossFarmRunning() then return true end
+		if appMod.isEliminationsRunning and appMod.isEliminationsRunning() then return true end
+		return false
+	end
+
+	appMod.setAutoCloak = function(state)
+		autoCloakEnabled = (state == true)
+		if not autoCloakEnabled then return end
+		lastCloakUseAt = 0
+	end
+	appMod.isAutoCloakEnabled = function() return autoCloakEnabled == true end
+
+	appMod.setHideWhileWaiting = function(state)
+		hideWaitingEnabled = (state == true)
+		if not hideWaitingEnabled then
+			local char = LocalPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if currentlyHiding and hrp and hrp.Parent and (hrp.Position - HIDE_POS).Magnitude < 45 then
+				hrp.AssemblyLinearVelocity = Vector3.zero
+				hrp.AssemblyAngularVelocity = Vector3.zero
+				hrp.CFrame = savedSurfaceCF or CFrame.new(-1060, 22, 2100)
+			end
+			currentlyHiding = false
+			savedSurfaceCF = nil
+			cleanupHidePlatforms()
+		end
+	end
+	appMod.isHideWhileWaitingEnabled = function() return hideWaitingEnabled == true end
+	_G.StandOut_CleanupHide = cleanupHidePlatforms
+
+	task.spawn(function()
+		while true do
+			task.wait(0.25)
+			if not isInstanceAlive() then return end
+
+			if autoCloakEnabled then
+				local char = LocalPlayer.Character
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+				local hum = char and char:FindFirstChildOfClass("Humanoid")
+				if char and hrp and hum and hum.Health > 0
+					and not char:GetAttribute("CombatLifeEnded")
+					and not char:GetAttribute("Rewind") then
+					if not isCloakCurrentlyWorn(char) then
+						local now = os.clock()
+						if (now - lastCloakUseAt) >= 2.4 then
+							lastCloakUseAt = now
+							equipCloakOnce(char)
+						end
+					end
+				end
+			end
+
+			local shouldHide = hideWaitingEnabled
+				and hasAnyRunningFarm()
+				and (not appMod.getActiveFarmOwner or appMod.getActiveFarmOwner(false) == nil)
+				and not autoCollectState.busyBarge
+
+			local char = LocalPlayer.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+			if shouldHide and char and hrp and hum and hum.Health > 0 then
+				if not currentlyHiding and hrp.Position.Y > -40 then
+					savedSurfaceCF = hrp.CFrame
+				end
+				ensureHidePlatforms()
+				currentlyHiding = true
+				if hrp.Anchored and not autoCollectState.busyBarge then
+					hrp.Anchored = false
+				end
+				if (hrp.Position - HIDE_POS).Magnitude > 10 or hrp.Position.Y < -90 or hrp.Position.Y > -74 then
+					hrp.AssemblyLinearVelocity = Vector3.zero
+					hrp.AssemblyAngularVelocity = Vector3.zero
+					hrp.CFrame = CFrame.new(HIDE_POS)
+				end
+			elseif currentlyHiding then
+				currentlyHiding = false
+				if not hasAnyRunningFarm() and hrp and hrp.Parent and (hrp.Position - HIDE_POS).Magnitude < 45 then
+					hrp.AssemblyLinearVelocity = Vector3.zero
+					hrp.AssemblyAngularVelocity = Vector3.zero
+					hrp.CFrame = savedSurfaceCF or CFrame.new(-1060, 22, 2100)
+				end
+				savedSurfaceCF = nil
+				if not hideWaitingEnabled or not hasAnyRunningFarm() then
+					cleanupHidePlatforms()
+				end
+			end
+		end
+	end)
+end)()
 
 LocalPlayer.CharacterAdded:Connect(function()
 	if not isInstanceAlive() then return end
@@ -4078,15 +4785,36 @@ _G.StandOut_RestoreEco = function()
 	if ecoState.enabled then
 		toggleEcoMode(false)
 	end
+	if _G.StandOut_CleanupHide then
+		pcall(_G.StandOut_CleanupHide)
+	end
 end
 
 local function buildAutoCollectBody(tab, parentFrame)
-	local body = Instance.new("Frame")
-	body.Position              = UDim2.fromOffset(143, 38)
-	body.Size                  = UDim2.new(1, -143, 1, -82)
+	local outerBody = Instance.new("Frame")
+	outerBody.Position              = UDim2.fromOffset(0, 0)
+	outerBody.Size                  = UDim2.new(1, 0, 1, 0)
+	outerBody.BackgroundTransparency= 1
+	outerBody.Visible               = false
+	outerBody.Parent                = parentFrame
+
+	local body = Instance.new("ScrollingFrame")
+	body.Position              = UDim2.fromOffset(0, 0)
+	body.Size                  = UDim2.new(1, 0, 1, 0)
 	body.BackgroundTransparency= 1
-	body.Visible               = false
-	body.Parent                = parentFrame
+	body.BorderSizePixel       = 0
+	body.ScrollBarThickness    = 4
+	body.ScrollBarImageColor3  = Color3.fromRGB(90, 96, 110)
+	body.AutomaticCanvasSize   = Enum.AutomaticSize.Y
+	body.CanvasSize            = UDim2.new()
+	body.Parent                = outerBody
+
+	local acSpacer = Instance.new("Frame")
+	acSpacer.BackgroundTransparency = 1
+	acSpacer.BorderSizePixel = 0
+	acSpacer.Position = UDim2.fromOffset(0, 282)
+	acSpacer.Size = UDim2.new(1, 0, 0, 96)
+	acSpacer.Parent = body
 
 	local targetOpts = {"Spawned Items", "Buried Supplies", "Scrap Barges", "World Events"}
 	configControls.targets = buildMultiDropdown(body, "Target Categories", targetOpts, 6, function(selected)
@@ -4129,60 +4857,8 @@ local function buildAutoCollectBody(tab, parentFrame)
 	status.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 14)
 	status.Parent = body
 
-	configControls.ecoMode = buildToggle(body, "Eco Mode (15 FPS + Min GFX)", 250, false, function(state)
-		toggleEcoMode(state)
-	end, true)
-
-	configControls.no3dRender = buildToggle(body, "Disable 3D Render (Multi-Box)", 282, false, function(state)
-		toggleNo3DRender(state)
-	end, true)
-
-	local initialAutoPlay = false
-	pcall(function()
-		if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile("StandOutHold/_autoplay_menu.txt") then
-			initialAutoPlay = (tostring(readfile("StandOutHold/_autoplay_menu.txt")):gsub("%s+", "") == "1")
-		end
-	end)
-
-	configControls.autoPlay = buildToggle(body, "Auto-Play Main Menu", 314, initialAutoPlay, function(state)
-		autoCollectState.autoPlay = (state == true)
-		pcall(function()
-			if typeof(isfolder) == "function" and typeof(makefolder) == "function" and typeof(writefile) == "function" then
-				if not isfolder("StandOutHold") then makefolder("StandOutHold") end
-				writefile("StandOutHold/_autoplay_menu.txt", (state == true) and "1" or "0")
-			end
-		end)
-	end, true)
-
-	local resetFpsBtn = Instance.new("TextButton")
-	resetFpsBtn.Text = "Reset FPS"
-	resetFpsBtn.Font = Enum.Font.GothamBold
-	resetFpsBtn.TextSize = 11
-	resetFpsBtn.TextColor3 = C_TEXT
-	resetFpsBtn.BackgroundColor3 = C_PANEL
-	resetFpsBtn.BorderSizePixel = 0
-	resetFpsBtn.Position = UDim2.fromOffset(PAGE_PAD_X, 350)
-	resetFpsBtn.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 24)
-	resetFpsBtn.Parent = body
-	corner(resetFpsBtn, 5)
-	stroke(resetFpsBtn, C_STROKE, 1, 0.35)
-
-	resetFpsBtn.MouseButton1Click:Connect(function()
-		if configControls.ecoMode and configControls.ecoMode.getState() then
-			configControls.ecoMode.setState(false)
-		elseif ecoState.enabled then
-			toggleEcoMode(false)
-		end
-		_G.StandOut_OrigFpsCap = 60
-		if typeof(setfpscap) == "function" then
-			pcall(setfpscap, 60)
-		end
-		status.Text = "Status: FPS cap reset to 60"
-		status.TextColor3 = C_OK
-	end)
-
 	local holdBar = Instance.new("Frame")
-	holdBar.Position = UDim2.fromOffset(PAGE_PAD_X, 382)
+	holdBar.Position = UDim2.fromOffset(PAGE_PAD_X, 250)
 	holdBar.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 24)
 	holdBar.BackgroundColor3 = C_PANEL
 	holdBar.BorderSizePixel = 0
@@ -4297,6 +4973,8 @@ local function buildAutoCollectBody(tab, parentFrame)
 			status.Text = "Status: Stopped"
 			status.TextColor3 = C_SUB
 		end
+		if appMod.getActiveFarmOwner then appMod.getActiveFarmOwner() end
+		if appMod.refreshPriorityUI then appMod.refreshPriorityUI() end
 		updateCountLabel()
 	end
 
@@ -4307,7 +4985,7 @@ local function buildAutoCollectBody(tab, parentFrame)
 		setAutoCollectRunning(not autoCollectState.running)
 	end)
 
-	tab.body = body
+	tab.body = outerBody
 	tab.state = { shownCount = 0 }
 	tab.status = status
 	tab.startBtn = startBtn
@@ -4594,11 +5272,57 @@ local bossMonitorState = {
 	rows          = {},
 }
 
+local bossFarmState = {
+	running         = false,
+	autoLight       = true,
+	autoHeavy       = true,
+	m1BeforeMove    = 2,
+	m1ComboCount    = 0,
+	selectedSkills  = {},
+	heldSkills      = {},
+	selectedEX      = {},
+	latchMode       = "Below (Face Up)",
+	latchDistance   = 3.8,
+	usedNoclipLatch = false,
+	lastTargetY     = nil,
+	noclipModified  = {},
+	completedCount  = 0,
+	activeBossId    = nil,
+	lastLightAt     = 0,
+	lastHeavyAt     = 0,
+	lastSkillAt     = 0,
+	lastSummonAt    = 0,
+	attackBusyUntil = 0,
+	swingIter       = 1,
+	skillLocalCd    = {},
+}
+
+local bossFarmUi = {
+	startBtn      = nil,
+	statusLbl     = nil,
+	autoLight     = nil,
+	autoHeavy     = nil,
+	m1CountSlider = nil,
+	latchModeDrop = nil,
+	latchOffset   = nil,
+	skillsDrop    = nil,
+	holdSkillsDrop = nil,
+	exMovesDrop   = nil,
+}
+
 ;(function()
 local BOSS_DURATION_SECONDS = 1200
 
 local function refreshBossMonitorUI()
 	if appMod.refreshBossMonitorUI then appMod.refreshBossMonitorUI() end
+end
+
+local function setBossFarmStatus(txt, color)
+	local lbl = bossFarmUi.statusLbl or (bossMonitorState.tab and bossMonitorState.tab.status)
+	if not lbl then return end
+	if lbl.Text ~= txt then lbl.Text = txt end
+	local col = color or C_SUB
+	if lbl.TextColor3 ~= col then lbl.TextColor3 = col end
 end
 
 local function isGameNight()
@@ -4842,13 +5566,13 @@ end
 
 local function buildMiniToggle(parent, label, xOffset, yOffset, width, defaultState, onChange)
 	local container = Instance.new("Frame")
-	container.Size = UDim2.fromOffset(width, 28)
+	container.Size = UDim2.fromOffset(width, 26)
 	container.Position = UDim2.fromOffset(xOffset, yOffset)
 	container.BackgroundColor3 = C_PANEL
 	container.BorderSizePixel = 0
 	container.Parent = parent
-	corner(container, 5)
-	stroke(container, C_STROKE, 1, 0.35)
+	corner(container, 6)
+	stroke(container, C_STROKE, 1, 0.45)
 
 	local lbl = Instance.new("TextLabel")
 	lbl.Text = label
@@ -4900,10 +5624,12 @@ local function buildMiniToggle(parent, label, xOffset, yOffset, width, defaultSt
 
 	if onChange then onChange(state) end
 	return {
+		frame    = container,
 		getState = function() return state end,
 		setState = setState,
 	}
 end
+appMod.buildMiniToggle = buildMiniToggle
 
 appMod.refreshBossMonitorUI = function()
 	local tab = bossMonitorState.tab
@@ -4921,7 +5647,7 @@ appMod.refreshBossMonitorUI = function()
 
 	local bosses = gatherActiveBosses()
 	tab.state.shownCount = #bosses
-	if tab == activeTab then updateCountLabel() end
+	if activeTab and activeTab.isAutoFarm then updateCountLabel() end
 
 	local sigParts = {}
 	for _, b in ipairs(bosses) do
@@ -4936,23 +5662,24 @@ appMod.refreshBossMonitorUI = function()
 		end
 		table.clear(bossMonitorState.rows)
 
+		local listParent = tab.listFrame or tab.scroll
 		for idx, item in ipairs(bosses) do
 			local row = Instance.new("Frame")
-			row.Size = UDim2.new(1, 0, 0, 68)
+			row.Size = UDim2.new(1, 0, 0, 56)
 			row.BackgroundColor3 = C_ROW
 			row.BorderSizePixel = 0
 			row.LayoutOrder = idx
-			row.Parent = tab.scroll
+			row.Parent = listParent
 			corner(row, 6)
 			stroke(row, item.bossKind == "DIO" and C_WARN or C_ACCENT_SOFT, 1, 0.45)
 
 			local titleLbl = Instance.new("TextLabel")
 			titleLbl.Font = Enum.Font.GothamBold
-			titleLbl.TextSize = 13
+			titleLbl.TextSize = 12
 			titleLbl.TextColor3 = C_TEXT
 			titleLbl.BackgroundTransparency = 1
-			titleLbl.Position = UDim2.fromOffset(10, 6)
-			titleLbl.Size = UDim2.new(1, -124, 0, 18)
+			titleLbl.Position = UDim2.fromOffset(10, 4)
+			titleLbl.Size = UDim2.new(1, -118, 0, 16)
 			titleLbl.TextXAlignment = Enum.TextXAlignment.Left
 			titleLbl.TextTruncate = Enum.TextTruncate.AtEnd
 			titleLbl.Parent = row
@@ -4961,8 +5688,8 @@ appMod.refreshBossMonitorUI = function()
 			timerLbl.Font = Enum.Font.Code
 			timerLbl.TextSize = 11
 			timerLbl.BackgroundTransparency = 1
-			timerLbl.Position = UDim2.fromOffset(10, 26)
-			timerLbl.Size = UDim2.new(1, -124, 0, 16)
+			timerLbl.Position = UDim2.fromOffset(10, 21)
+			timerLbl.Size = UDim2.new(1, -118, 0, 14)
 			timerLbl.TextXAlignment = Enum.TextXAlignment.Left
 			timerLbl.Parent = row
 
@@ -4971,8 +5698,8 @@ appMod.refreshBossMonitorUI = function()
 			infoLbl.TextSize = 11
 			infoLbl.TextColor3 = C_SUB
 			infoLbl.BackgroundTransparency = 1
-			infoLbl.Position = UDim2.fromOffset(10, 44)
-			infoLbl.Size = UDim2.new(1, -124, 0, 16)
+			infoLbl.Position = UDim2.fromOffset(10, 36)
+			infoLbl.Size = UDim2.new(1, -118, 0, 14)
 			infoLbl.TextXAlignment = Enum.TextXAlignment.Left
 			infoLbl.TextTruncate = Enum.TextTruncate.AtEnd
 			infoLbl.Parent = row
@@ -4984,8 +5711,8 @@ appMod.refreshBossMonitorUI = function()
 			tpBtn.TextColor3 = C_TEXT
 			tpBtn.BackgroundColor3 = C_ACCENT
 			tpBtn.BorderSizePixel = 0
-			tpBtn.Position = UDim2.new(1, -104, 0.5, -14)
-			tpBtn.Size = UDim2.fromOffset(52, 28)
+			tpBtn.Position = UDim2.new(1, -98, 0.5, -13)
+			tpBtn.Size = UDim2.fromOffset(48, 26)
 			tpBtn.Parent = row
 			corner(tpBtn, 5)
 
@@ -4996,8 +5723,8 @@ appMod.refreshBossMonitorUI = function()
 			hlBtn.TextColor3 = C_TEXT
 			hlBtn.BackgroundColor3 = C_PANEL
 			hlBtn.BorderSizePixel = 0
-			hlBtn.Position = UDim2.new(1, -46, 0.5, -14)
-			hlBtn.Size = UDim2.fromOffset(36, 28)
+			hlBtn.Position = UDim2.new(1, -44, 0.5, -13)
+			hlBtn.Size = UDim2.fromOffset(36, 26)
 			hlBtn.Parent = row
 			corner(hlBtn, 5)
 
@@ -5086,16 +5813,132 @@ appMod.refreshBossMonitorUI = function()
 	end
 end
 
+local function releaseBossCharacterLock()
+	if appMod.combat and appMod.combat.releaseLock then
+		appMod.combat.releaseLock(bossFarmState)
+	end
+end
+
+local function pickActiveBossTarget()
+	local bosses = gatherActiveBosses()
+	if #bosses == 0 then return nil end
+	for _, b in ipairs(bosses) do
+		if b.model and appMod.combat and appMod.combat.isModelAlive(b.model) then
+			return b
+		end
+	end
+	return bosses[1]
+end
+
+local function hasBossFarmWork()
+	if not bossFarmState.running then return false end
+	if not bossMonitorState.monitorDIO and not bossMonitorState.monitorJotaro then
+		return false
+	end
+	for _, ev in pairs(bossMonitorState.eventsById) do
+		local bossKind = classifyEventBoss(ev)
+		if bossKind and not isWorldEventEnded(ev) then
+			if (bossKind == "DIO" and bossMonitorState.monitorDIO)
+				or (bossKind == "Jotaro" and bossMonitorState.monitorJotaro) then
+				return true
+			end
+		end
+	end
+	local gameFolder = workspace:FindFirstChild("Game")
+	local playersFolder = gameFolder and gameFolder:FindFirstChild("Players")
+	if playersFolder then
+		for _, m in ipairs(playersFolder:GetChildren()) do
+			local bossKind = classifyModelBoss(m)
+			if bossKind and ((bossKind == "DIO" and bossMonitorState.monitorDIO)
+				or (bossKind == "Jotaro" and bossMonitorState.monitorJotaro)) then
+				local hum = m:FindFirstChildOfClass("Humanoid")
+				if not hum or hum.Health > 0 then
+					return true
+				end
+			end
+		end
+	end
+	return false
+end
+
+local function setBossFarmRunning(shouldRun)
+	shouldRun = (shouldRun == true)
+	if shouldRun == bossFarmState.running then return end
+	bossFarmState.running = shouldRun
+
+	if bossFarmUi.startBtn then
+		bossFarmUi.startBtn.Text = shouldRun and "Stop Boss Farm" or "Start Boss Farm"
+		bossFarmUi.startBtn.BackgroundColor3 = shouldRun and C_ERR or C_ACCENT
+	end
+
+	if shouldRun then
+		setBossFarmStatus("Status: Monitoring for spawned bosses...", C_OK)
+		requestWorldEventsSnapshot()
+	else
+		bossFarmState.activeBossId = nil
+		releaseBossCharacterLock()
+		setBossFarmStatus("Status: Stopped | Clears: " .. tostring(bossFarmState.completedCount), C_SUB)
+	end
+
+	if appMod.getActiveFarmOwner then appMod.getActiveFarmOwner(true) end
+	if appMod.refreshPriorityUI then appMod.refreshPriorityUI() end
+	if activeTab and activeTab.isAutoFarm then updateCountLabel() end
+end
+
+appMod.isBossFarmRunning = function() return bossFarmState.running == true end
+appMod.setBossFarmRunning = setBossFarmRunning
+appMod.serializeBossConfig = function()
+	return {
+		monitorDIO     = configControls.bossDIO and configControls.bossDIO.getState() or bossMonitorState.monitorDIO,
+		monitorJotaro  = configControls.bossJotaro and configControls.bossJotaro.getState() or bossMonitorState.monitorJotaro,
+		autoHighlight  = configControls.bossAutoHL and configControls.bossAutoHL.getState() or bossMonitorState.autoHighlight,
+		farmRunning    = bossFarmState.running == true,
+		autoLight      = bossFarmUi.autoLight and bossFarmUi.autoLight.getState() or bossFarmState.autoLight,
+		autoHeavy      = bossFarmUi.autoHeavy and bossFarmUi.autoHeavy.getState() or bossFarmState.autoHeavy,
+		m1BeforeMove   = bossFarmUi.m1CountSlider and bossFarmUi.m1CountSlider.getValue() or bossFarmState.m1BeforeMove,
+		latchMode      = bossFarmUi.latchModeDrop and bossFarmUi.latchModeDrop.getValue() or bossFarmState.latchMode,
+		latchDistance  = bossFarmUi.latchOffset and bossFarmUi.latchOffset.getValue() or bossFarmState.latchDistance,
+		skills         = bossFarmUi.skillsDrop and bossFarmUi.skillsDrop.getValue() or {},
+		holdSkills     = bossFarmUi.holdSkillsDrop and bossFarmUi.holdSkillsDrop.getValue() or {},
+		exMoves        = bossFarmUi.exMovesDrop and bossFarmUi.exMovesDrop.getValue() or {},
+	}
+end
+appMod.applyBossConfig = function(cfg)
+	if type(cfg) ~= "table" then return end
+	if configControls.bossDIO and cfg.monitorDIO ~= nil then configControls.bossDIO.setState(cfg.monitorDIO) end
+	if configControls.bossJotaro and cfg.monitorJotaro ~= nil then configControls.bossJotaro.setState(cfg.monitorJotaro) end
+	if configControls.bossAutoHL and cfg.autoHighlight ~= nil then configControls.bossAutoHL.setState(cfg.autoHighlight) end
+	if bossFarmUi.autoLight and cfg.autoLight ~= nil then bossFarmUi.autoLight.setState(cfg.autoLight) end
+	if bossFarmUi.autoHeavy and cfg.autoHeavy ~= nil then bossFarmUi.autoHeavy.setState(cfg.autoHeavy) end
+	if bossFarmUi.m1CountSlider and cfg.m1BeforeMove ~= nil then bossFarmUi.m1CountSlider.setValue(cfg.m1BeforeMove) end
+	if bossFarmUi.latchModeDrop and cfg.latchMode ~= nil then bossFarmUi.latchModeDrop.setValue(cfg.latchMode, true) end
+	if bossFarmUi.latchOffset and cfg.latchDistance ~= nil then bossFarmUi.latchOffset.setValue(cfg.latchDistance) end
+	if bossFarmUi.skillsDrop and type(cfg.skills) == "table" then bossFarmUi.skillsDrop.setValue(cfg.skills, true) end
+	if bossFarmUi.holdSkillsDrop and type(cfg.holdSkills) == "table" then bossFarmUi.holdSkillsDrop.setValue(cfg.holdSkills, true) end
+	if bossFarmUi.exMovesDrop and type(cfg.exMoves) == "table" then bossFarmUi.exMovesDrop.setValue(cfg.exMoves, true) end
+	if cfg.farmRunning ~= nil then setBossFarmRunning(cfg.farmRunning == true) end
+end
+
+if appMod.registerFarmHandler then
+	appMod.registerFarmHandler("Bosses", {
+		label      = "Bosses (DIO / Jotaro)",
+		isEnabled  = function() return bossFarmState.running == true end,
+		setEnabled = setBossFarmRunning,
+		hasWork    = hasBossFarmWork,
+		onYield    = releaseBossCharacterLock,
+	})
+end
+
 appMod.buildSpawnedBossesBody = function(tab, parentFrame)
 	local body = Instance.new("Frame")
-	body.Position              = UDim2.fromOffset(143, 38)
-	body.Size                  = UDim2.new(1, -143, 1, -82)
+	body.Position              = UDim2.fromOffset(0, 0)
+	body.Size                  = UDim2.new(1, 0, 1, 0)
 	body.BackgroundTransparency= 1
 	body.Visible               = false
 	body.Parent                = parentFrame
 
 	local topBar = Instance.new("Frame")
-	topBar.Size = UDim2.new(1, 0, 0, 34)
+	topBar.Size = UDim2.new(1, 0, 0, 26)
 	topBar.BackgroundColor3 = C_HEADER
 	topBar.BackgroundTransparency = 0.25
 	topBar.BorderSizePixel = 0
@@ -5107,8 +5950,8 @@ appMod.buildSpawnedBossesBody = function(tab, parentFrame)
 	timeLbl.TextSize = 11
 	timeLbl.TextColor3 = C_SUB
 	timeLbl.BackgroundTransparency = 1
-	timeLbl.Position = UDim2.fromOffset(10, 0)
-	timeLbl.Size = UDim2.new(1, -74, 1, 0)
+	timeLbl.Position = UDim2.fromOffset(PAGE_PAD_X, 0)
+	timeLbl.Size = UDim2.new(1, -82, 1, 0)
 	timeLbl.TextXAlignment = Enum.TextXAlignment.Left
 	timeLbl.TextTruncate = Enum.TextTruncate.AtEnd
 	timeLbl.Parent = topBar
@@ -5120,23 +5963,67 @@ appMod.buildSpawnedBossesBody = function(tab, parentFrame)
 	syncBtn.TextColor3 = C_TEXT
 	syncBtn.BackgroundColor3 = C_PANEL
 	syncBtn.BorderSizePixel = 0
-	syncBtn.Size = UDim2.fromOffset(52, 22)
-	syncBtn.Position = UDim2.new(1, -60, 0.5, -11)
+	syncBtn.Size = UDim2.fromOffset(50, 20)
+	syncBtn.Position = UDim2.new(1, -(PAGE_PAD_X + 50), 0.5, -10)
 	syncBtn.Parent = topBar
 	corner(syncBtn, 5)
 	stroke(syncBtn, C_STROKE, 1, 0.35)
 
-	configControls.bossDIO = buildMiniToggle(body, "Monitor DIO", 10, 42, 104, true, function(s)
+	local startBtn = Instance.new("TextButton")
+	startBtn.Text = "Start Boss Farm"
+	startBtn.Font = Enum.Font.GothamBold
+	startBtn.TextSize = 12
+	startBtn.TextColor3 = C_TEXT
+	startBtn.BackgroundColor3 = C_ACCENT
+	startBtn.BorderSizePixel = 0
+	startBtn.Position = UDim2.fromOffset(PAGE_PAD_X, 30)
+	startBtn.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 26)
+	startBtn.Parent = body
+	corner(startBtn, 6)
+	bossFarmUi.startBtn = startBtn
+
+	startBtn.MouseButton1Click:Connect(function()
+		setBossFarmRunning(not bossFarmState.running)
+	end)
+
+	local status = Instance.new("TextLabel")
+	status.Text = "Status: Idle | Clears: 0"
+	status.Font = Enum.Font.Gotham
+	status.TextSize = 11
+	status.TextColor3 = C_SUB
+	status.BackgroundTransparency = 1
+	status.TextXAlignment = Enum.TextXAlignment.Left
+	status.TextTruncate = Enum.TextTruncate.AtEnd
+	status.Position = UDim2.fromOffset(PAGE_PAD_X, 60)
+	status.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 15)
+	status.Parent = body
+	bossFarmUi.statusLbl = status
+
+	local bossFilterRow = Instance.new("Frame")
+	bossFilterRow.Position = UDim2.fromOffset(PAGE_PAD_X, 78)
+	bossFilterRow.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 26)
+	bossFilterRow.BackgroundTransparency = 1
+	bossFilterRow.Parent = body
+
+	configControls.bossDIO = buildMiniToggle(bossFilterRow, "DIO", 0, 0, 0, true, function(s)
 		bossMonitorState.monitorDIO = s
 		task.defer(refreshBossMonitorUI)
 	end)
+	if configControls.bossDIO and configControls.bossDIO.frame then
+		configControls.bossDIO.frame.Position = UDim2.new(0, 0, 0, 0)
+		configControls.bossDIO.frame.Size = UDim2.new(0.333, -4, 0, 24)
+	end
 
-	configControls.bossJotaro = buildMiniToggle(body, "Monitor Jotaro", 120, 42, 114, true, function(s)
+	configControls.bossJotaro = buildMiniToggle(bossFilterRow, "Jotaro", 0, 0, 0, true, function(s)
 		bossMonitorState.monitorJotaro = s
 		task.defer(refreshBossMonitorUI)
 	end)
+	if configControls.bossJotaro and configControls.bossJotaro.frame then
+		configControls.bossJotaro.frame.Position = UDim2.new(0.333, 2, 0, 0)
+		configControls.bossJotaro.frame.Size = UDim2.new(0.333, -4, 0, 24)
+	end
 
-	configControls.bossAutoHL = buildMiniToggle(body, "Auto-HL", 240, 42, 97, false, function(s)
+	configControls.bossAutoHL = buildMiniToggle(bossFilterRow, "Auto-HL", 0, 0, 0, false, function(s)
 		bossMonitorState.autoHighlight = s
 		if not s then
 			for m in pairs(bossMonitorState.highlighted) do
@@ -5146,69 +6033,265 @@ appMod.buildSpawnedBossesBody = function(tab, parentFrame)
 		end
 		task.defer(refreshBossMonitorUI)
 	end)
+	if configControls.bossAutoHL and configControls.bossAutoHL.frame then
+		configControls.bossAutoHL.frame.Position = UDim2.new(0.666, 4, 0, 0)
+		configControls.bossAutoHL.frame.Size = UDim2.new(0.334, -4, 0, 24)
+	end
 
 	local scroll = Instance.new("ScrollingFrame")
-	scroll.Position               = UDim2.fromOffset(0, 78)
-	scroll.Size                   = UDim2.new(1, 0, 1, -104)
+	scroll.Position               = UDim2.fromOffset(0, 112)
+	scroll.Size                   = UDim2.new(1, 0, 1, -114)
 	scroll.BackgroundTransparency = 1
 	scroll.BorderSizePixel        = 0
-	scroll.ScrollBarThickness     = 4
-	scroll.ScrollBarImageColor3   = C_STROKE
+	scroll.ScrollBarThickness     = 5
+	scroll.ScrollBarImageColor3   = Color3.fromRGB(90, 96, 110)
 	scroll.CanvasSize             = UDim2.new(0, 0, 0, 0)
 	scroll.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 	scroll.Parent                 = body
 
-	local pad = Instance.new("UIPadding")
-	pad.PaddingLeft   = UDim.new(0, 10)
-	pad.PaddingRight  = UDim.new(0, 10)
-	pad.PaddingTop    = UDim.new(0, 4)
-	pad.PaddingBottom = UDim.new(0, 6)
-	pad.Parent        = scroll
+	local outerLayout = Instance.new("UIListLayout")
+	outerLayout.Padding   = UDim.new(0, 6)
+	outerLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	outerLayout.Parent    = scroll
+
+	local listFrame = Instance.new("Frame")
+	listFrame.LayoutOrder            = 1
+	listFrame.Size                   = UDim2.new(1, 0, 0, 0)
+	listFrame.AutomaticSize          = Enum.AutomaticSize.Y
+	listFrame.BackgroundTransparency = 1
+	listFrame.Parent                 = scroll
+
+	local listPad = Instance.new("UIPadding")
+	listPad.PaddingLeft  = UDim.new(0, PAGE_PAD_X)
+	listPad.PaddingRight = UDim.new(0, PAGE_PAD_X)
+	listPad.PaddingTop   = UDim.new(0, 2)
+	listPad.Parent       = listFrame
 
 	local list = Instance.new("UIListLayout")
-	list.Padding   = UDim.new(0, 6)
+	list.Padding   = UDim.new(0, 5)
 	list.SortOrder = Enum.SortOrder.LayoutOrder
-	list.Parent    = scroll
+	list.Parent    = listFrame
 
 	local empty = Instance.new("TextLabel")
+	empty.LayoutOrder = 0
 	empty.Text = "No monitored bosses currently spawned."
 	empty.Font = Enum.Font.Gotham
-	empty.TextSize = 12
+	empty.TextSize = 11
 	empty.TextColor3 = C_SUB
-	empty.BackgroundTransparency = 1
-	empty.Position = UDim2.fromOffset(10, 140)
-	empty.Size = UDim2.new(1, -20, 0, 40)
+	empty.BackgroundColor3 = C_PANEL
+	empty.BorderSizePixel = 0
+	empty.Size = UDim2.new(1, 0, 0, 28)
 	empty.TextWrapped = true
 	empty.Visible = false
-	empty.Parent = body
+	empty.Parent = listFrame
+	corner(empty, 5)
 
-	local status = Instance.new("TextLabel")
-	status.Text = "DIO spawns only at night • 20m despawn timer"
-	status.Font = Enum.Font.Gotham
-	status.TextSize = 11
-	status.TextColor3 = C_SUB
-	status.BackgroundTransparency = 1
-	status.TextXAlignment = Enum.TextXAlignment.Left
-	status.TextTruncate = Enum.TextTruncate.AtEnd
-	status.AnchorPoint = Vector2.new(0, 1)
-	status.Position = UDim2.new(0, 10, 1, -4)
-	status.Size = UDim2.new(1, -20, 0, 18)
-	status.Parent = body
+	local settingsPanel = Instance.new("Frame")
+	settingsPanel.LayoutOrder            = 2
+	settingsPanel.Size                   = UDim2.new(1, 0, 0, 566)
+	settingsPanel.BackgroundTransparency = 1
+	settingsPanel.Parent                 = scroll
+
+	local secLbl = Instance.new("TextLabel")
+	secLbl.Text = "Boss Combat Settings"
+	secLbl.Font = Enum.Font.GothamBold
+	secLbl.TextSize = 11
+	secLbl.TextColor3 = C_ACCENT
+	secLbl.BackgroundTransparency = 1
+	secLbl.Position = UDim2.fromOffset(PAGE_PAD_X, 2)
+	secLbl.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 16)
+	secLbl.TextXAlignment = Enum.TextXAlignment.Left
+	secLbl.Parent = settingsPanel
+
+	bossFarmUi.autoLight = buildToggle(settingsPanel, "Normal Attacks", 22, true, function(s)
+		bossFarmState.autoLight = (s == true)
+	end, false)
+
+	bossFarmUi.autoHeavy = buildToggle(settingsPanel, "Heavy Swings", 56, true, function(s)
+		bossFarmState.autoHeavy = (s == true)
+	end, false)
+
+	bossFarmUi.m1CountSlider = buildSlider(settingsPanel, "M1s Before Heavy/Skill", 0, 6, 2, 92, true, function(val)
+		bossFarmState.m1BeforeMove = val
+	end)
+
+	bossFarmUi.latchModeDrop = buildDropdown(settingsPanel, "Latch Position", {"Behind", "Above (Face Down)", "Below (Face Up)"}, 3, 146, function(_, opt)
+		bossFarmState.latchMode = opt
+		if opt == "Behind" and appMod.combat then
+			local char = LocalPlayer.Character
+			if char then appMod.combat.setNoclip(bossFarmState, char, false) end
+			bossFarmState.usedNoclipLatch = false
+		end
+	end)
+
+	bossFarmUi.latchOffset = buildSlider(settingsPanel, "Latch Offset (studs)", 1.5, 8.0, 3.8, 200, false, function(val)
+		bossFarmState.latchDistance = val
+	end)
+
+	bossFarmUi.skillsDrop = buildMultiDropdown(settingsPanel, "Stand Skills", {"Skill 1", "Skill 2", "Skill 3", "Skill 4", "Skill 5", "Skill 6"}, 254, function(sel)
+		bossFarmState.selectedSkills = sel
+	end)
+
+	bossFarmUi.holdSkillsDrop = buildMultiDropdown(settingsPanel, "Hold Skills", {"Skill 1", "Skill 2", "Skill 3", "Skill 4", "Skill 5", "Skill 6"}, 308, function(sel)
+		bossFarmState.heldSkills = sel
+	end)
+
+	bossFarmUi.exMovesDrop = buildMultiDropdown(settingsPanel, "EX Moves", {"EX Skill 1", "EX Skill 2", "EX Skill 3", "EX Skill 4", "EX Skill 5", "EX Skill 6"}, 362, function(sel)
+		bossFarmState.selectedEX = sel
+	end)
+
+	local bossSpacer = Instance.new("Frame")
+	bossSpacer.BackgroundTransparency = 1
+	bossSpacer.BorderSizePixel = 0
+	bossSpacer.Position = UDim2.fromOffset(0, 416)
+	bossSpacer.Size = UDim2.new(1, 0, 0, 148)
+	bossSpacer.Parent = settingsPanel
 
 	syncBtn.MouseButton1Click:Connect(function()
 		requestWorldEventsSnapshot()
-		status.Text = "Synced active bosses with server."
-		status.TextColor3 = C_OK
+		setBossFarmStatus("Status: Synced active bosses with server.", C_OK)
 	end)
 
-	tab.body    = body
-	tab.scroll  = scroll
-	tab.empty   = empty
-	tab.status  = status
-	tab.timeLbl = timeLbl
-	tab.state   = { shownCount = 0 }
+	tab.body      = body
+	tab.scroll    = scroll
+	tab.listFrame = listFrame
+	tab.empty     = empty
+	tab.status    = status
+	tab.timeLbl   = timeLbl
+	tab.state     = { shownCount = 0 }
 	bossMonitorState.tab = tab
 end
+
+-- Continuous Boss latch during active Boss Farm
+RunService.Heartbeat:Connect(function()
+	if not isInstanceAlive() then return end
+	if not bossFarmState.running then return end
+	if not appMod.combat then return end
+	if appMod.isFarmOwner and not appMod.isFarmOwner("Bosses") then return end
+
+	local char = LocalPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not char or not hrp or not hum or hum.Health <= 0 then return end
+	if appMod.combat.isStandSummoned and not appMod.combat.isStandSummoned(char) then return end
+
+	local best = pickActiveBossTarget()
+	if not best or not best.model then return end
+	local tHrp, tHum = appMod.combat.isModelAlive(best.model)
+	if not tHrp or not tHum then return end
+
+	appMod.combat.applyLatch(bossFarmState, char, hrp, tHrp.CFrame)
+end)
+
+-- Main Boss Auto-Farm loop
+task.spawn(function()
+	while isInstanceAlive() and not appMod.combat do
+		task.wait(0.05)
+	end
+	local prevBossModel = nil
+	local waitDur = 0.12
+	while true do
+		task.wait(waitDur)
+		waitDur = 0.12
+		if not isInstanceAlive() then return end
+
+		if prevBossModel and prevBossModel.Parent then
+			local prevHum = prevBossModel:FindFirstChildOfClass("Humanoid")
+			if prevHum and prevHum.Health <= 0 then
+				bossFarmState.completedCount += 1
+				bossFarmState.activeBossId = nil
+				prevBossModel = nil
+				releaseBossCharacterLock()
+			end
+		elseif prevBossModel and not prevBossModel.Parent then
+			prevBossModel = nil
+		end
+
+		if not bossFarmState.running then
+			continue
+		end
+
+		if appMod.isFarmOwner and not appMod.isFarmOwner("Bosses") then
+			local owner = appMod.getActiveFarmOwner()
+			if owner then
+				if next(bossFarmState.noclipModified) or bossFarmState.usedNoclipLatch then
+					releaseBossCharacterLock()
+				end
+				setBossFarmStatus("Status: Yielded to " .. tostring(owner), C_WARN)
+				continue
+			end
+		end
+
+		local best = pickActiveBossTarget()
+		if not best then
+			if bossFarmState.activeBossId ~= nil then
+				bossFarmState.activeBossId = nil
+				releaseBossCharacterLock()
+			end
+			if bossFarmState.running then
+				setBossFarmStatus("Status: Waiting for boss spawn... | Clears: " .. tostring(bossFarmState.completedCount), C_SUB)
+			end
+			continue
+		end
+
+		local char = LocalPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not char or not hrp or not hum or hum.Health <= 0 then
+			releaseBossCharacterLock()
+			setBossFarmStatus("Status: Waiting for character...", C_WARN)
+			continue
+		end
+
+		local tHrp, tHum = best.model and appMod.combat.isModelAlive(best.model) or nil, nil
+		if best.model then
+			tHrp, tHum = appMod.combat.isModelAlive(best.model)
+		end
+
+		if not tHrp or not tHum then
+			releaseBossCharacterLock()
+			if typeof(best.pos) == "Vector3" then
+				local dist = (hrp.Position - best.pos).Magnitude
+				if dist > 24 then
+					hrp.CFrame = CFrame.new(best.pos + Vector3.new(0, 6, 0))
+				end
+				setBossFarmStatus(string.format("Streaming %s (%.0f studs)...", tostring(best.bossKind), dist), C_WARN)
+			else
+				setBossFarmStatus("Locating " .. tostring(best.bossKind) .. "...", C_WARN)
+			end
+			continue
+		end
+
+		prevBossModel = best.model
+		if bossFarmState.activeBossId ~= best.id then
+			bossFarmState.activeBossId = best.id
+			bossFarmState.m1ComboCount = 0
+		end
+
+		if appMod.combat.getEquippedStand and appMod.combat.isStandSummoned and appMod.combat.ensureStandSummon then
+			if appMod.combat.getEquippedStand() ~= "" and not appMod.combat.isStandSummoned(char) then
+				releaseBossCharacterLock()
+				setBossFarmStatus("Status: Summoning Stand...", C_WARN)
+				appMod.combat.ensureStandSummon(char, hrp)
+				continue
+			end
+		end
+
+		waitDur = 0.03
+		local hpCur = math.floor(tHum.Health + 0.5)
+		local hpMax = math.max(1, math.floor(tHum.MaxHealth + 0.5))
+		setBossFarmStatus(string.format("Fighting %s [Lvl %s] | HP: %d/%d | Clears: %d",
+			tostring(best.bossKind), tostring(best.level or "-"), hpCur, hpMax, bossFarmState.completedCount), C_OK)
+
+		appMod.combat.runComboStep(bossFarmState, char, hrp, best.model, tHrp)
+		if tHum.Health <= 0 then
+			bossFarmState.completedCount += 1
+			bossFarmState.activeBossId = nil
+			prevBossModel = nil
+			releaseBossCharacterLock()
+		end
+	end
+end)
 
 -- Subscribe to WorldEvents remote for instant DIO & Jotaro spawn + exact despawn timestamps
 task.spawn(function()
@@ -5402,26 +6485,58 @@ local function resolveElimSkillCatalog()
 	}
 end
 
+local cachedSkillsDefsMod = nil
+local cachedHudSkillEntries = {}
+local cachedHudSkillsRoot = nil
+
 local function getSkillsDefModule()
+	if cachedSkillsDefsMod then return cachedSkillsDefsMod end
 	local mods = ReplicatedStorage:FindFirstChild("Modules")
 	local sMod = mods and mods:FindFirstChild("Skills")
 	local ok, tbl = pcall(require, sMod)
-	return (ok and type(tbl) == "table" and type(tbl.skills) == "table") and tbl.skills or nil
+	if ok and type(tbl) == "table" and type(tbl.skills) == "table" then
+		cachedSkillsDefsMod = tbl.skills
+	end
+	return cachedSkillsDefsMod
 end
 
+local cachedHudSkillMissAt = {}
 local function isHudSkillOnCooldown(skillName)
 	local mainHud = PlayerGui:FindFirstChild("MainHUD")
 	local skillsGui = mainHud and mainHud:FindFirstChild("Skills")
 	if not skillsGui then return false end
-	local entry = skillsGui:FindFirstChild(skillName, true)
-	local cdFrame = entry and entry:FindFirstChild("Cooldown")
+	if cachedHudSkillsRoot ~= skillsGui then
+		cachedHudSkillsRoot = skillsGui
+		table.clear(cachedHudSkillEntries)
+		table.clear(cachedHudSkillMissAt)
+	end
+	local entry = cachedHudSkillEntries[skillName]
+	if entry ~= nil and (entry == false or not entry.Parent) then
+		entry = nil
+		cachedHudSkillEntries[skillName] = nil
+	end
+	if not entry then
+		local now = os.clock()
+		local missAt = cachedHudSkillMissAt[skillName] or 0
+		if (now - missAt) >= 1.5 then
+			entry = skillsGui:FindFirstChild(skillName, true)
+			if entry then
+				cachedHudSkillEntries[skillName] = entry
+				cachedHudSkillMissAt[skillName] = nil
+			else
+				cachedHudSkillMissAt[skillName] = now
+			end
+		end
+	end
+	if not entry then return false end
+	local cdFrame = entry:FindFirstChild("Cooldown")
 	if cdFrame and cdFrame:IsA("GuiObject") and cdFrame.Size.X.Scale > 0.005 then
 		return true
 	end
 	return false
 end
 
-local function canCastSkillNow(skillName, isEX, char, ctrl, u69, states)
+local function canCastSkillNow(skillName, isEX, char, ctrl, u69, states, stateObj)
 	if type(skillName) ~= "string" or skillName == "" then return false end
 	if not char or not char.Parent then return false end
 	local data = LocalPlayer:FindFirstChild("Data")
@@ -5439,7 +6554,8 @@ local function canCastSkillNow(skillName, isEX, char, ctrl, u69, states)
 		return false
 	end
 
-	local cdUntil = elimState.skillLocalCd[skillName]
+	local st = stateObj or elimState
+	local cdUntil = st.skillLocalCd[skillName]
 	if cdUntil and os.clock() < cdUntil then
 		return false
 	end
@@ -5492,7 +6608,7 @@ local function buildSkillAim(hrp, targetModel, tHrp)
 	return aimCFrame, closestMouse
 end
 
-local function dispatchSkillAttack(skillName, isEX, targetModel, tHrp, shouldHold)
+local function dispatchSkillAttack(skillName, isEX, targetModel, tHrp, shouldHold, stateObj)
 	local char = LocalPlayer.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	if not char or not hrp or not tHrp then return false, 0 end
@@ -5502,8 +6618,9 @@ local function dispatchSkillAttack(skillName, isEX, targetModel, tHrp, shouldHol
 		return false, 0
 	end
 
+	local st = stateObj or elimState
 	local states = (type(ctrl.getStates) == "function") and ctrl:getStates() or {}
-	if not canCastSkillNow(skillName, isEX, char, ctrl, u69, states) then
+	if not canCastSkillNow(skillName, isEX, char, ctrl, u69, states, st) then
 		return false, 0
 	end
 
@@ -5526,8 +6643,8 @@ local function dispatchSkillAttack(skillName, isEX, targetModel, tHrp, shouldHol
 	end)
 	if ok then
 		-- Short anti-double-fire guard; actual full cooldown comes from states.OnCooldown + HUD + attribute checks
-		elimState.skillLocalCd[skillName] = os.clock() + 1.1
-		elimState.lastSkillAt = os.clock()
+		st.skillLocalCd[skillName] = os.clock() + 1.1
+		st.lastSkillAt = os.clock()
 		task.delay(holdDur, function()
 			pcall(function()
 				local c2 = LocalPlayer.Character
@@ -5539,9 +6656,32 @@ local function dispatchSkillAttack(skillName, isEX, targetModel, tHrp, shouldHol
 				sendFn("ReleasedSkill", skillName, relAim, false, relMouse, statesCopy)
 			end)
 		end)
-		return true, (holdMove and (holdDur + 0.16) or 0.45)
+		return true, (holdMove and (holdDur + 0.12) or 0.18)
 	end
 	return false, 0
+end
+
+local cachedWeaponsMod, cachedStandsMod, cachedUtilityMod
+
+local function getCombatModules()
+	if not cachedWeaponsMod or not cachedStandsMod or not cachedUtilityMod then
+		local mods = ReplicatedStorage:FindFirstChild("Modules")
+		if mods then
+			if not cachedWeaponsMod then
+				local okW, m = pcall(require, mods:FindFirstChild("Weapons"))
+				if okW and type(m) == "table" then cachedWeaponsMod = m end
+			end
+			if not cachedStandsMod then
+				local okS, m = pcall(require, mods:FindFirstChild("Stands"))
+				if okS and type(m) == "table" then cachedStandsMod = m end
+			end
+			if not cachedUtilityMod then
+				local okU, m = pcall(require, mods:FindFirstChild("Utility"))
+				if okU and type(m) == "table" then cachedUtilityMod = m end
+			end
+		end
+	end
+	return cachedWeaponsMod, cachedStandsMod, cachedUtilityMod
 end
 
 local function buildDynamicLightPayload(char, token, standObj, iter)
@@ -5551,10 +6691,10 @@ local function buildDynamicLightPayload(char, token, standObj, iter)
 	local wv  = data and data:FindFirstChild("Weapon")
 	local weaponName = (wov and wov.Value ~= "" and wov.Value) or (wv and wv.Value ~= "" and wv.Value) or "Fists"
 
-	local mods = ReplicatedStorage:FindFirstChild("Modules")
-	local okW, Weapons = pcall(require, mods and mods:FindFirstChild("Weapons"))
-	local okS, Stands  = pcall(require, mods and mods:FindFirstChild("Stands"))
-	local okU, Utility = pcall(require, mods and mods:FindFirstChild("Utility"))
+	local Weapons, Stands, Utility = getCombatModules()
+	local okW = Weapons ~= nil
+	local okS = Stands ~= nil
+	local okU = Utility ~= nil
 
 	local sDef = (okS and type(Stands) == "table" and standName ~= "" and Stands.GetDefinition)
 		and Stands:GetDefinition(char, standName) or nil
@@ -5571,7 +6711,9 @@ local function buildDynamicLightPayload(char, token, standObj, iter)
 
 	local comboLen = (pInfo and type(pInfo.SwingActiveTimes) == "table" and #pInfo.SwingActiveTimes) or 4
 	if comboLen < 1 then comboLen = 4 end
-	local safeIter = ((iter - 1) % comboLen) + 1
+	-- Loop non-finisher swings continuously to avoid 1.0s M1Cooldown finisher lockout & knockback
+	local loopLen = (comboLen > 1) and (comboLen - 1) or 1
+	local safeIter = ((iter - 1) % loopLen) + 1
 	if pInfo and ((pInfo.LightExtraHits and pInfo.LightExtraHits[safeIter])
 		or (pInfo.SpecialSwings and pInfo.SpecialSwings[1] == safeIter)) then
 		safeIter = 1
@@ -5611,10 +6753,10 @@ local function buildDynamicLightPayload(char, token, standObj, iter)
 		animObj = lightFolder and lightFolder:FindFirstChild(tostring(safeIter))
 	end
 	local actorModel = useStand and (standObj or getStandActorModel()) or char
-	local isFinisher = (safeIter >= comboLen)
+	local isFinisher = (comboLen == 1)
 	local lightHitEvents = pInfo and pInfo.LightHitEvents and pInfo.LightHitEvents[safeIter]
 
-	local animLen = math.max(0.28, at1 + len1 + 0.08)
+	local animLen = math.max(0.28, at1 + len1 + 0.04)
 	local animTbl
 	if animObj and actorModel then
 		animTbl = {
@@ -5624,7 +6766,8 @@ local function buildDynamicLightPayload(char, token, standObj, iter)
 		}
 	end
 
-	local nextIter = (safeIter % comboLen) + 1
+	local nextIter = (safeIter % loopLen) + 1
+	local swingStepDelay = math.max(0.24, at1 + math.max(0.06, len1 * 0.45))
 	return {
 		Heavy = false,
 		Size = size1,
@@ -5634,7 +6777,7 @@ local function buildDynamicLightPayload(char, token, standObj, iter)
 		Iteration = safeIter,
 		Windup = lightHitEvents ~= nil,
 		BlockedLag = pInfo and pInfo.BlockedEndlag or nil,
-		FreeAfter = math.max(at1 + len1, animLen - tail) + 0.02,
+		FreeAfter = swingStepDelay,
 		Anim = animTbl,
 		Contacts = {
 			{
@@ -5653,14 +6796,15 @@ local function buildDynamicLightPayload(char, token, standObj, iter)
 			},
 		},
 		Token = token,
-	}, nextIter, math.max(0.24, at1 + len1 + 0.08)
+	}, nextIter, swingStepDelay
 end
 
-local function fireLightSwing(targetModel)
+local function fireLightSwing(targetModel, stateObj)
 	local char = LocalPlayer.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	if not char or not hrp then return nil end
 
+	local st = stateObj or elimState
 	local ctrl, u69 = getPlayerController()
 	local remote = getMeleeRemote(u69)
 	if remote then
@@ -5676,8 +6820,8 @@ local function fireLightSwing(targetModel)
 			rawset(u69, "serverMeleePending", pend)
 		end
 
-		local payload, nextIter, releaseDelay = buildDynamicLightPayload(char, nextToken, standObj, elimState.swingIter)
-		elimState.swingIter = nextIter
+		local payload, nextIter, releaseDelay = buildDynamicLightPayload(char, nextToken, standObj, st.swingIter or 1)
+		st.swingIter = nextIter
 
 		local okFire = pcall(function()
 			if isJob then
@@ -5709,8 +6853,9 @@ local function fireLightSwing(targetModel)
 	return nil, 0.45
 end
 
-local function tryCastSelectedEX(targetModel, tHrp)
-	local sel = elimState.selectedEX
+local function tryCastSelectedEX(targetModel, tHrp, stateObj)
+	local st = stateObj or elimState
+	local sel = st.selectedEX
 	if type(sel) ~= "table" or not next(sel) then return false, 0 end
 	local cat = resolveElimSkillCatalog()
 	if not cat.hasEX then return false, 0 end
@@ -5725,8 +6870,8 @@ local function tryCastSelectedEX(targetModel, tHrp)
 			if (not exName or exName == "") and i >= 5 then
 				exName = cat.exOnlyList[i - 4]
 			end
-			if exName and canCastSkillNow(exName, true, char, ctrl, u69, states) then
-				local castOk, castDur = dispatchSkillAttack(exName, true, targetModel, tHrp, false)
+			if exName and canCastSkillNow(exName, true, char, ctrl, u69, states, st) then
+				local castOk, castDur = dispatchSkillAttack(exName, true, targetModel, tHrp, false, st)
 				if castOk then
 					return true, castDur
 				end
@@ -5737,17 +6882,18 @@ local function tryCastSelectedEX(targetModel, tHrp)
 	return false, 0
 end
 
-local function tryCastSelectedBaseSkill(targetModel, tHrp)
-	local sel = elimState.selectedSkills
+local function tryCastSelectedBaseSkill(targetModel, tHrp, stateObj)
+	local st = stateObj or elimState
+	local sel = st.selectedSkills
 	if type(sel) ~= "table" or not next(sel) then return false, 0 end
-	local holdSel = elimState.heldSkills or {}
+	local holdSel = st.heldSkills or {}
 	local cat = resolveElimSkillCatalog()
 
 	for i = 1, 6 do
 		if sel["Skill " .. i] then
 			local sName = cat.baseSkills[i]
 			if sName and sName ~= "" then
-				local castOk, castDur = dispatchSkillAttack(sName, false, targetModel, tHrp, holdSel["Skill " .. i] == true)
+				local castOk, castDur = dispatchSkillAttack(sName, false, targetModel, tHrp, holdSel["Skill " .. i] == true, st)
 				if castOk then
 					return true, castDur
 				end
@@ -5758,38 +6904,94 @@ local function tryCastSelectedBaseSkill(targetModel, tHrp)
 end
 
 local function setElimStatus(txt, color)
-	if elimUi.statusLbl then
-		elimUi.statusLbl.Text = txt
-		elimUi.statusLbl.TextColor3 = color or C_SUB
-	end
+	local lbl = elimUi.statusLbl
+	if not lbl then return end
+	if lbl.Text ~= txt then lbl.Text = txt end
+	local col = color or C_SUB
+	if lbl.TextColor3 ~= col then lbl.TextColor3 = col end
 end
 
-local function setElimCharacterNoclip(char, enabled)
+local function setCharacterNoclipState(st, char, enabled)
 	if not char then return end
+	st.noclipModified = st.noclipModified or {}
 	if enabled then
-		for _, part in ipairs(char:GetDescendants()) do
-			if part:IsA("BasePart") and part.CanCollide then
-				elimState.noclipModified[part] = true
+		if st.noclipChar ~= char or not st.noclipParts then
+			st.noclipChar = char
+			local parts = {}
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") then
+					local n = part.Name
+					if part.CanCollide or n == "HumanoidRootPart" or n == "Torso" or n == "Head"
+						or n == "UpperTorso" or n == "LowerTorso"
+						or n == "Left Arm" or n == "Right Arm" or n == "Left Leg" or n == "Right Leg" then
+						table.insert(parts, part)
+					end
+				end
+			end
+			st.noclipParts = parts
+		end
+		for _, part in ipairs(st.noclipParts) do
+			if part and part.Parent and part.CanCollide then
+				st.noclipModified[part] = true
 				part.CanCollide = false
 			end
 		end
 	else
-		for part in pairs(elimState.noclipModified) do
+		for part in pairs(st.noclipModified) do
 			if part and part.Parent and part:IsA("BasePart") then
 				part.CanCollide = true
 			end
 		end
-		table.clear(elimState.noclipModified)
+		table.clear(st.noclipModified)
 	end
 end
 
-local function releaseElimCharacterLock()
+local function applyCharacterLatchCFrame(st, char, hrp, tCF)
+	local flatLook = Vector3.new(tCF.LookVector.X, 0, tCF.LookVector.Z)
+	if flatLook.Magnitude < 0.05 then
+		flatLook = Vector3.new(0, 0, -1)
+	else
+		flatLook = flatLook.Unit
+	end
+
+	local offset = math.clamp(tonumber(st.latchDistance) or 4.5, 1.5, 10)
+	local mode = st.latchMode or "Behind"
+	st.lastTargetY = tCF.Position.Y
+
+	if hrp.Anchored and not autoCollectState.busyBarge then
+		hrp.Anchored = false
+	end
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
+
+	if mode == "Above (Face Down)" then
+		setCharacterNoclipState(st, char, true)
+		st.usedNoclipLatch = true
+		local abovePos = Vector3.new(tCF.Position.X, tCF.Position.Y + offset, tCF.Position.Z)
+		hrp.CFrame = CFrame.lookAt(abovePos, tCF.Position, flatLook)
+	elseif mode == "Below (Face Up)" then
+		setCharacterNoclipState(st, char, true)
+		st.usedNoclipLatch = true
+		local belowPos = Vector3.new(tCF.Position.X, tCF.Position.Y - offset, tCF.Position.Z)
+		hrp.CFrame = CFrame.lookAt(belowPos, tCF.Position, flatLook)
+	else
+		if st.usedNoclipLatch then
+			setCharacterNoclipState(st, char, false)
+			st.usedNoclipLatch = false
+		end
+		local behindPos = Vector3.new(tCF.Position.X - flatLook.X * offset, tCF.Position.Y, tCF.Position.Z - flatLook.Z * offset)
+		local facePos = Vector3.new(tCF.Position.X, behindPos.Y, tCF.Position.Z)
+		hrp.CFrame = CFrame.lookAt(behindPos, facePos)
+	end
+end
+
+local function releaseCharacterLockState(st)
 	local char = LocalPlayer.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	if hrp and not autoCollectState.busyBarge then
-		if elimState.usedNoclipLatch and elimState.lastTargetY then
-			local safeY = math.max(hrp.Position.Y, elimState.lastTargetY + 2.5)
+		if st.usedNoclipLatch and st.lastTargetY then
+			local safeY = math.max(hrp.Position.Y, st.lastTargetY + 2.5)
 			hrp.CFrame = CFrame.new(hrp.Position.X, safeY, hrp.Position.Z)
 		end
 		hrp.Anchored = false
@@ -5797,12 +6999,12 @@ local function releaseElimCharacterLock()
 		hrp.AssemblyAngularVelocity = Vector3.zero
 	end
 	if char then
-		setElimCharacterNoclip(char, false)
-	else
-		table.clear(elimState.noclipModified)
+		setCharacterNoclipState(st, char, false)
+	elseif st.noclipModified then
+		table.clear(st.noclipModified)
 	end
-	elimState.usedNoclipLatch = false
-	elimState.m1ComboCount = 0
+	st.usedNoclipLatch = false
+	st.m1ComboCount = 0
 	if hum then
 		hum.AutoRotate = true
 	end
@@ -5810,6 +7012,95 @@ local function releaseElimCharacterLock()
 	if ctrl then
 		resetStuckCombatStates(ctrl, u69)
 	end
+end
+
+local function runComboCombatStep(st, char, hrp, targetModel, tHrp)
+	local now = os.clock()
+	local data = LocalPlayer:FindFirstChild("Data")
+	local skillBusy = data and data:FindFirstChild("SkillActive") and data.SkillActive.Value == true
+	local isStunned = (char:GetAttribute("Stunned") == true)
+	if skillBusy or isStunned or now < (st.attackBusyUntil or 0) then
+		return false
+	end
+
+	-- Ensure equipped Stand is fully summoned & visible before executing ANY attack or skill
+	if getEquippedStandName() ~= "" then
+		local standOut = isStandProperlySummoned(char)
+		if not standOut then
+			if (now - (st.lastSummonAt or 0)) >= 0.45 then
+				st.lastSummonAt = now
+				ensureStandReadyForBarge(char, hrp)
+			end
+			if not isStandProperlySummoned(char) then
+				return false
+			end
+		end
+	end
+
+	local distToTarget = (hrp.Position - tHrp.Position).Magnitude
+	if distToTarget > ((st.latchDistance or 4.5) + 6) then
+		return false
+	end
+
+	local nReq = math.max(0, math.floor(tonumber(st.m1BeforeMove) or 0))
+	local needBuildM1 = st.autoLight and (nReq > 0) and ((st.m1ComboCount or 0) < nReq)
+
+	if needBuildM1 then
+		st.lastLightAt = now
+		st.m1ComboCount = (st.m1ComboCount or 0) + 1
+		local _, lightDur = fireLightSwing(targetModel, st)
+		st.attackBusyUntil = now + (lightDur or 0.34)
+		return true
+	end
+
+	local exOk, exDur = tryCastSelectedEX(targetModel, tHrp, st)
+	if exOk then
+		st.m1ComboCount = 0
+		st.attackBusyUntil = now + (exDur or 0.18)
+		return true
+	end
+
+	local skOk, skDur = tryCastSelectedBaseSkill(targetModel, tHrp, st)
+	if skOk then
+		st.m1ComboCount = 0
+		st.attackBusyUntil = now + (skDur or 0.18)
+		return true
+	end
+
+	if st.autoHeavy and (now - (st.lastHeavyAt or 0)) >= 2.2 then
+		st.lastHeavyAt = now
+		st.m1ComboCount = 0
+		st.attackBusyUntil = now + 0.58
+		fireHeavySwing()
+		return true
+	elseif st.autoLight then
+		st.lastLightAt = now
+		st.m1ComboCount = (st.m1ComboCount or 0) + 1
+		local _, lightDur = fireLightSwing(targetModel, st)
+		st.attackBusyUntil = now + (lightDur or 0.34)
+		return true
+	end
+
+	return false
+end
+
+appMod.combat = {
+	isModelAlive      = isModelAlive,
+	setNoclip         = setCharacterNoclipState,
+	applyLatch        = applyCharacterLatchCFrame,
+	releaseLock       = releaseCharacterLockState,
+	runComboStep      = runComboCombatStep,
+	getEquippedStand  = getEquippedStandName,
+	isStandSummoned   = isStandProperlySummoned,
+	ensureStandSummon = ensureStandReadyForBarge,
+}
+
+local function setElimCharacterNoclip(char, enabled)
+	setCharacterNoclipState(elimState, char, enabled)
+end
+
+local function releaseElimCharacterLock()
+	releaseCharacterLockState(elimState)
 end
 
 local function setElimRunning(shouldRun)
@@ -5823,7 +7114,7 @@ local function setElimRunning(shouldRun)
 	end
 
 	if shouldRun then
-		setElimStatus("Status: Syncing Elimination state...", C_OK)
+		setElimStatus("Status: Starting Elims...", C_OK)
 		local pb = getPlayerBountiesRemote()
 		if pb then
 			pcall(function() pb.FireServer(pb, "Sync") end)
@@ -5834,7 +7125,9 @@ local function setElimRunning(shouldRun)
 		setElimStatus("Status: Stopped | Completed: " .. tostring(elimState.completedCount), C_SUB)
 	end
 
-	if activeTab and activeTab.isEliminations then
+	if appMod.getActiveFarmOwner then appMod.getActiveFarmOwner(true) end
+	if appMod.refreshPriorityUI then appMod.refreshPriorityUI() end
+	if activeTab and activeTab.isAutoFarm then
 		updateCountLabel()
 	end
 end
@@ -5842,6 +7135,28 @@ end
 elimState.setRunning = setElimRunning
 appMod.isEliminationsRunning = function() return elimState.running == true end
 appMod.stopEliminations = function() setElimRunning(false) end
+
+local function hasEliminationWork()
+	if not elimState.running then return false end
+	local b = elimState.bounty or { State = "Idle" }
+	if b.State == "Active" or b.State == "Searching" or b.State == "Completing" then
+		return true
+	end
+	if elimState.autoStart and os.clock() >= (elimState.searchBackoffUntil or 0) then
+		return true
+	end
+	return false
+end
+
+if appMod.registerFarmHandler then
+	appMod.registerFarmHandler("Eliminations", {
+		label      = "Elims. (Contracts)",
+		isEnabled  = function() return elimState.running == true end,
+		setEnabled = setElimRunning,
+		hasWork    = hasEliminationWork,
+		onYield    = releaseElimCharacterLock,
+	})
+end
 
 -- Hook PlayerBounties updates
 task.spawn(function()
@@ -5856,10 +7171,12 @@ task.spawn(function()
 			elimState.bounty = { State = "Idle", Message = payload.Message }
 			elimState.searchBackoffUntil = os.clock() + 1.0
 			releaseElimCharacterLock()
-		elseif payload.State == "Cancelled" then
-			elimState.bounty = { State = "Idle", Message = payload.Message }
+		elseif payload.State == "Cancelled" or (payload.State == "Idle" and payload.SearchFailed) then
+			elimState.bounty = { State = "Idle", Message = payload.Message, SearchFailed = payload.SearchFailed }
 			if payload.SearchFailed then
-				elimState.searchBackoffUntil = os.clock() + 3.5
+				local msgLower = string.lower(tostring(payload.Message or ""))
+				local waitSec = msgLower:find("later", 1, true) and 12.0 or 3.5
+				elimState.searchBackoffUntil = os.clock() + waitSec
 			end
 			releaseElimCharacterLock()
 		else
@@ -5873,10 +7190,11 @@ task.spawn(function()
 	end
 end)
 
--- Continuous behind-target latch during active Elimination
+-- Continuous target latch during active Elimination
 RunService.Heartbeat:Connect(function()
 	if not isInstanceAlive() then return end
 	if not elimState.running then return end
+	if appMod.isFarmOwner and not appMod.isFarmOwner("Eliminations") then return end
 
 	local b = elimState.bounty
 	if not b or b.State ~= "Active" or b.Respawning then return end
@@ -5885,59 +7203,36 @@ RunService.Heartbeat:Connect(function()
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
 	if not char or not hrp or not hum or hum.Health <= 0 then return end
+	if not isStandProperlySummoned(char) then return end
 
 	local targetModel = findElimTargetModel(b.CharacterName)
 	local tHrp, tHum = isModelAlive(targetModel)
 	if not tHrp or not tHum then return end
 
-	local tCF = tHrp.CFrame
-	local flatLook = Vector3.new(tCF.LookVector.X, 0, tCF.LookVector.Z)
-	if flatLook.Magnitude < 0.05 then
-		flatLook = Vector3.new(0, 0, -1)
-	else
-		flatLook = flatLook.Unit
-	end
-
-	local offset = math.clamp(tonumber(elimState.latchDistance) or 3.5, 1.5, 10)
-	local mode = elimState.latchMode or "Behind"
-	elimState.lastTargetY = tCF.Position.Y
-
-	-- Keep HRP unanchored so Stand AI + ServerMelee hitboxes register normally against Humanoid targets
-	if hrp.Anchored and not autoCollectState.busyBarge then
-		hrp.Anchored = false
-	end
-	hrp.AssemblyLinearVelocity = Vector3.zero
-	hrp.AssemblyAngularVelocity = Vector3.zero
-
-	if mode == "Above (Face Down)" then
-		setElimCharacterNoclip(char, true)
-		elimState.usedNoclipLatch = true
-		local abovePos = Vector3.new(tCF.Position.X, tCF.Position.Y + offset, tCF.Position.Z)
-		hrp.CFrame = CFrame.lookAt(abovePos, tCF.Position, flatLook)
-	elseif mode == "Below (Face Up)" then
-		setElimCharacterNoclip(char, true)
-		elimState.usedNoclipLatch = true
-		local belowPos = Vector3.new(tCF.Position.X, tCF.Position.Y - offset, tCF.Position.Z)
-		hrp.CFrame = CFrame.lookAt(belowPos, tCF.Position, flatLook)
-	else
-		if elimState.usedNoclipLatch then
-			setElimCharacterNoclip(char, false)
-			elimState.usedNoclipLatch = false
-		end
-		local behindPos = Vector3.new(tCF.Position.X - flatLook.X * offset, tCF.Position.Y, tCF.Position.Z - flatLook.Z * offset)
-		local facePos = Vector3.new(tCF.Position.X, behindPos.Y, tCF.Position.Z)
-		hrp.CFrame = CFrame.lookAt(behindPos, facePos)
-	end
+	applyCharacterLatchCFrame(elimState, char, hrp, tHrp.CFrame)
 end)
 
 -- Main Elimination Farm & Combat Loop
 task.spawn(function()
+	local waitDur = 0.14
 	while true do
-		task.wait(0.08)
+		task.wait(waitDur)
+		waitDur = 0.14
 		if not isInstanceAlive() then return end
 
 		if not elimState.running then
 			continue
+		end
+
+		if appMod.isFarmOwner and not appMod.isFarmOwner("Eliminations") then
+			local owner = appMod.getActiveFarmOwner()
+			if owner then
+				if next(elimState.noclipModified) or elimState.usedNoclipLatch then
+					releaseElimCharacterLock()
+				end
+				setElimStatus("Status: Yielded to " .. tostring(owner), C_WARN)
+				continue
+			end
 		end
 
 		local b = elimState.bounty or { State = "Idle" }
@@ -5951,7 +7246,13 @@ task.spawn(function()
 					setElimStatus("Status: Starting new elimination...", C_WARN)
 					pcall(function() pb.FireServer(pb, "Start") end)
 				else
-					setElimStatus("Status: Waiting to start quest...", C_SUB)
+					local remWait = math.max(0, (elimState.searchBackoffUntil or 0) - now)
+					if type(b.Message) == "string" and b.Message ~= "" then
+						local suffix = (remWait >= 1) and string.format(" (retry %.0fs)", remWait) or ""
+						setElimStatus("Status: " .. b.Message .. suffix, C_WARN)
+					else
+						setElimStatus("Status: Waiting to start quest...", C_SUB)
+					end
 				end
 			else
 				setElimStatus("Status: Idle (Auto-Start OFF)", C_SUB)
@@ -6007,67 +7308,20 @@ task.spawn(function()
 			continue
 		end
 
+		if getEquippedStandName() ~= "" and not isStandProperlySummoned(char) then
+			releaseElimCharacterLock()
+			setElimStatus("Status: Summoning Stand...", C_WARN)
+			ensureStandReadyForBarge(char, hrp)
+			continue
+		end
+
+		waitDur = 0.03
 		local hpCur = math.floor(tHum.Health + 0.5)
 		local hpMax = math.max(1, math.floor(tHum.MaxHealth + 0.5))
 		setElimStatus(string.format("Fighting %s [Lvl %s] | HP: %d/%d | Clears: %d",
 			tostring(b.DisplayName or b.CharacterName), tostring(b.Level or "-"), hpCur, hpMax, elimState.completedCount), C_OK)
 
-		-- Summon stand if needed
-		if char:GetAttribute("Summoned") ~= true and getEquippedStandName() ~= "" and (now - elimState.lastSummonAt) >= 1.2 then
-			elimState.lastSummonAt = now
-			ensureStandReadyForBarge(char, hrp)
-		end
-
-		local distToTarget = (hrp.Position - tHrp.Position).Magnitude
-		if distToTarget > (elimState.latchDistance + 6) then
-			continue
-		end
-
-		local data = LocalPlayer:FindFirstChild("Data")
-		local skillBusy = data and data:FindFirstChild("SkillActive") and data.SkillActive.Value == true
-		local isStunned = (char:GetAttribute("Stunned") == true)
-		if skillBusy or isStunned or now < (elimState.attackBusyUntil or 0) then
-			continue
-		end
-
-		local nReq = math.max(0, math.floor(tonumber(elimState.m1BeforeMove) or 0))
-		local needBuildM1 = elimState.autoLight and (nReq > 0) and (elimState.m1ComboCount < nReq)
-
-		if needBuildM1 then
-			elimState.lastLightAt = now
-			elimState.m1ComboCount += 1
-			local _, lightDur = fireLightSwing(targetModel)
-			elimState.attackBusyUntil = now + (lightDur or 0.36) + 0.03
-			continue
-		end
-
-		-- Combo target met (or m1BeforeMove == 0 / Normal Attacks off): prioritize off-cooldown EX -> Stand Skills -> Heavy Swing
-		local exOk, exDur = tryCastSelectedEX(targetModel, tHrp)
-		if exOk then
-			elimState.m1ComboCount = 0
-			elimState.attackBusyUntil = now + (exDur or 0.45)
-			continue
-		end
-
-		local skOk, skDur = tryCastSelectedBaseSkill(targetModel, tHrp)
-		if skOk then
-			elimState.m1ComboCount = 0
-			elimState.attackBusyUntil = now + (skDur or 0.45)
-			continue
-		end
-
-		if elimState.autoHeavy and (now - elimState.lastHeavyAt) >= 2.2 then
-			elimState.lastHeavyAt = now
-			elimState.m1ComboCount = 0
-			elimState.attackBusyUntil = now + 0.85
-			fireHeavySwing()
-		elseif elimState.autoLight then
-			-- M1 continuously while enabled skills/EX/Heavy are waiting on cooldown
-			elimState.lastLightAt = now
-			elimState.m1ComboCount += 1
-			local _, lightDur = fireLightSwing(targetModel)
-			elimState.attackBusyUntil = now + (lightDur or 0.36) + 0.03
-		end
+		runComboCombatStep(elimState, char, hrp, targetModel, tHrp)
 	end
 end)
 
@@ -6102,8 +7356,8 @@ end
 
 appMod.buildEliminationsBody = function(tab, parentFrame)
 	local body = Instance.new("Frame")
-	body.Position               = UDim2.fromOffset(143, 38)
-	body.Size                   = UDim2.new(1, -143, 1, -82)
+	body.Position               = UDim2.fromOffset(0, 0)
+	body.Size                   = UDim2.new(1, 0, 1, 0)
 	body.BackgroundTransparency = 1
 	body.Visible                = false
 	body.Parent                 = parentFrame
@@ -6138,7 +7392,12 @@ appMod.buildEliminationsBody = function(tab, parentFrame)
 	statusLbl.Parent = body
 	elimUi.statusLbl = statusLbl
 
-	local questBtnW = math.floor((490 - 143 - PAGE_PAD_X * 2 - 8) / 2)
+	local questRow = Instance.new("Frame")
+	questRow.Position = UDim2.fromOffset(PAGE_PAD_X, 58)
+	questRow.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 26)
+	questRow.BackgroundTransparency = 1
+	questRow.Parent = body
+
 	local reqBtn = Instance.new("TextButton")
 	reqBtn.Text = "Start Quest"
 	reqBtn.Font = Enum.Font.GothamBold
@@ -6146,10 +7405,10 @@ appMod.buildEliminationsBody = function(tab, parentFrame)
 	reqBtn.TextColor3 = C_TEXT
 	reqBtn.BackgroundColor3 = C_PANEL
 	reqBtn.BorderSizePixel = 0
-	reqBtn.Position = UDim2.fromOffset(PAGE_PAD_X, 58)
-	reqBtn.Size = UDim2.fromOffset(questBtnW, 24)
-	reqBtn.Parent = body
-	corner(reqBtn, 5)
+	reqBtn.Position = UDim2.fromOffset(0, 0)
+	reqBtn.Size = UDim2.new(0.5, -4, 1, 0)
+	reqBtn.Parent = questRow
+	corner(reqBtn, 6)
 	stroke(reqBtn, C_STROKE, 1, 0.35)
 
 	reqBtn.MouseButton1Click:Connect(function()
@@ -6167,10 +7426,10 @@ appMod.buildEliminationsBody = function(tab, parentFrame)
 	cancelBtn.TextColor3 = C_ERR
 	cancelBtn.BackgroundColor3 = C_PANEL
 	cancelBtn.BorderSizePixel = 0
-	cancelBtn.Position = UDim2.fromOffset(PAGE_PAD_X + questBtnW + 8, 58)
-	cancelBtn.Size = UDim2.fromOffset(questBtnW, 24)
-	cancelBtn.Parent = body
-	corner(cancelBtn, 5)
+	cancelBtn.Position = UDim2.new(0.5, 4, 0, 0)
+	cancelBtn.Size = UDim2.new(0.5, -4, 1, 0)
+	cancelBtn.Parent = questRow
+	corner(cancelBtn, 6)
 	stroke(cancelBtn, C_ERR, 1, 0.4)
 
 	cancelBtn.MouseButton1Click:Connect(function()
@@ -6337,11 +7596,18 @@ local function serializeCurrentConfig()
 			delayTime  = configControls.delayTime and configControls.delayTime.getValue() or autoCollectState.delayTime,
 			running    = autoCollectState.running == true,
 			ecoMode     = configControls.ecoMode and configControls.ecoMode.getState() or ecoState.enabled,
-			ecoKey      = configControls.ecoMode and configControls.ecoMode.getKeybind() or nil,
+			ecoKey      = configControls.ecoMode and configControls.ecoMode.getKeybind and configControls.ecoMode.getKeybind() or nil,
 			no3dRender  = configControls.no3dRender and configControls.no3dRender.getState() or ecoState.no3d,
-			no3dKey     = configControls.no3dRender and configControls.no3dRender.getKeybind() or nil,
+			no3dKey     = configControls.no3dRender and configControls.no3dRender.getKeybind and configControls.no3dRender.getKeybind() or nil,
 			autoPlay    = configControls.autoPlay and configControls.autoPlay.getState() or autoCollectState.autoPlay == true,
-			autoPlayKey = configControls.autoPlay and configControls.autoPlay.getKeybind() or nil,
+			autoPlayKey = configControls.autoPlay and configControls.autoPlay.getKeybind and configControls.autoPlay.getKeybind() or nil,
+		},
+		perf = {
+			ecoMode          = configControls.ecoMode and configControls.ecoMode.getState() or ecoState.enabled,
+			no3dRender       = configControls.no3dRender and configControls.no3dRender.getState() or ecoState.no3d,
+			autoPlay         = configControls.autoPlay and configControls.autoPlay.getState() or autoCollectState.autoPlay == true,
+			hideWhileWaiting = configControls.hideWhileWaiting and configControls.hideWhileWaiting.getState() or (appMod.isHideWhileWaitingEnabled and appMod.isHideWhileWaitingEnabled() == true),
+			autoCloak        = configControls.autoCloak and configControls.autoCloak.getState() or (appMod.isAutoCloakEnabled and appMod.isAutoCloakEnabled() == true),
 		},
 		misc = {
 			esp         = configControls.esp and configControls.esp.getState() or false,
@@ -6357,17 +7623,18 @@ local function serializeCurrentConfig()
 			wsKey       = configControls.walkspeed and configControls.walkspeed.getKeybind() or nil,
 			wsSpeed     = configControls.wsSpeed and configControls.wsSpeed.getValue() or wsSpeed,
 		},
-		bosses = {
-			monitorDIO    = configControls.bossDIO and configControls.bossDIO.getState() or bossMonitorState.monitorDIO,
-			monitorJotaro = configControls.bossJotaro and configControls.bossJotaro.getState() or bossMonitorState.monitorJotaro,
-			autoHighlight = configControls.bossAutoHL and configControls.bossAutoHL.getState() or bossMonitorState.autoHighlight,
-		},
+		bosses       = appMod.serializeBossConfig and appMod.serializeBossConfig() or nil,
 		eliminations = appMod.serializeElimConfig and appMod.serializeElimConfig() or nil,
+		priority     = appMod.farmPriority and { order = table.clone(appMod.farmPriority.order) } or nil,
 	}
 end
 
 local function applyConfigTable(cfg)
 	if type(cfg) ~= "table" then return false end
+
+	if type(cfg.priority) == "table" and type(cfg.priority.order) == "table" and appMod.setFarmOrder then
+		appMod.setFarmOrder(cfg.priority.order)
+	end
 
 	if type(cfg.misc) == "table" then
 		local m = cfg.misc
@@ -6385,15 +7652,42 @@ local function applyConfigTable(cfg)
 		if configControls.walkspeed and m.wsKey ~= nil then configControls.walkspeed.setKeybind(m.wsKey) end
 	end
 
-	if type(cfg.bosses) == "table" then
-		local b = cfg.bosses
-		if configControls.bossDIO and b.monitorDIO ~= nil then configControls.bossDIO.setState(b.monitorDIO) end
-		if configControls.bossJotaro and b.monitorJotaro ~= nil then configControls.bossJotaro.setState(b.monitorJotaro) end
-		if configControls.bossAutoHL and b.autoHighlight ~= nil then configControls.bossAutoHL.setState(b.autoHighlight) end
+	if type(cfg.bosses) == "table" and appMod.applyBossConfig then
+		appMod.applyBossConfig(cfg.bosses)
 	end
 
 	if type(cfg.eliminations) == "table" and appMod.applyElimConfig then
 		appMod.applyElimConfig(cfg.eliminations)
+	end
+
+	local perfCfg = type(cfg.perf) == "table" and cfg.perf or cfg.autoCollect
+	if type(perfCfg) == "table" then
+		if configControls.ecoMode then
+			configControls.ecoMode.setState(perfCfg.ecoMode == true)
+			if configControls.ecoMode.setKeybind and perfCfg.ecoKey ~= nil then configControls.ecoMode.setKeybind(perfCfg.ecoKey) end
+		elseif appMod.toggleEcoMode then
+			appMod.toggleEcoMode(perfCfg.ecoMode == true)
+		end
+		if configControls.no3dRender then
+			configControls.no3dRender.setState(perfCfg.no3dRender == true)
+			if configControls.no3dRender.setKeybind and perfCfg.no3dKey ~= nil then configControls.no3dRender.setKeybind(perfCfg.no3dKey) end
+		elseif appMod.toggleNo3DRender then
+			appMod.toggleNo3DRender(perfCfg.no3dRender == true)
+		end
+		if configControls.autoPlay and perfCfg.autoPlay ~= nil then
+			configControls.autoPlay.setState(perfCfg.autoPlay == true)
+			if configControls.autoPlay.setKeybind and perfCfg.autoPlayKey ~= nil then configControls.autoPlay.setKeybind(perfCfg.autoPlayKey) end
+		end
+		if configControls.hideWhileWaiting and perfCfg.hideWhileWaiting ~= nil then
+			configControls.hideWhileWaiting.setState(perfCfg.hideWhileWaiting == true)
+		elseif appMod.setHideWhileWaiting and perfCfg.hideWhileWaiting ~= nil then
+			appMod.setHideWhileWaiting(perfCfg.hideWhileWaiting == true)
+		end
+		if configControls.autoCloak and perfCfg.autoCloak ~= nil then
+			configControls.autoCloak.setState(perfCfg.autoCloak == true)
+		elseif appMod.setAutoCloak and perfCfg.autoCloak ~= nil then
+			appMod.setAutoCloak(perfCfg.autoCloak == true)
+		end
 	end
 
 	if type(cfg.autoCollect) == "table" then
@@ -6409,24 +7703,6 @@ local function applyConfigTable(cfg)
 		end
 		if configControls.delayTime and ac.delayTime ~= nil then
 			configControls.delayTime.setValue(ac.delayTime)
-		end
-		if configControls.ecoMode and ac.ecoMode ~= nil then
-			configControls.ecoMode.setState(ac.ecoMode)
-		end
-		if configControls.ecoMode and ac.ecoKey ~= nil then
-			configControls.ecoMode.setKeybind(ac.ecoKey)
-		end
-		if configControls.no3dRender and ac.no3dRender ~= nil then
-			configControls.no3dRender.setState(ac.no3dRender)
-		end
-		if configControls.no3dRender and ac.no3dKey ~= nil then
-			configControls.no3dRender.setKeybind(ac.no3dKey)
-		end
-		if configControls.autoPlay and ac.autoPlay ~= nil then
-			configControls.autoPlay.setState(ac.autoPlay)
-		end
-		if configControls.autoPlay and ac.autoPlayKey ~= nil then
-			configControls.autoPlay.setKeybind(ac.autoPlayKey)
 		end
 	end
 
@@ -6787,14 +8063,517 @@ appMod.buildConfigsBody = function(tab, parentFrame)
 end
 end)()
 
+--=====================================================================
+-- Unified Auto Farm Container (Collect / Eliminations / Bosses / Priority)
+--=====================================================================
+;(function()
+	local prioRefs = {
+		masterBtn = nil,
+		ownerLbl  = nil,
+		cards     = {},
+	}
+
+	appMod.refreshPriorityUI = function()
+		if not prioRefs.ownerLbl then return end
+		local coord = appMod.farmPriority
+		if not coord then return end
+
+		local activeOwner = coord.currentOwner
+		local enabledCount = 0
+		for _, k in ipairs(coord.order) do
+			local h = coord.handlers[k]
+			if h and h.isEnabled and h.isEnabled() then
+				enabledCount += 1
+			end
+		end
+
+		local ownerLabel = (activeOwner and coord.handlers[activeOwner] and coord.handlers[activeOwner].label) or "None"
+		prioRefs.ownerLbl.Text = string.format("Active: %s  |  Enabled: %d/3", ownerLabel, enabledCount)
+		prioRefs.ownerLbl.TextColor3 = activeOwner and C_OK or C_SUB
+
+		if prioRefs.masterBtn then
+			if enabledCount > 0 then
+				prioRefs.masterBtn.Text = "Stop All Farms (" .. enabledCount .. " ON)"
+				prioRefs.masterBtn.BackgroundColor3 = C_ERR
+			else
+				prioRefs.masterBtn.Text = "Start All Farms"
+				prioRefs.masterBtn.BackgroundColor3 = C_ACCENT
+			end
+		end
+
+		for rank, k in ipairs(coord.order) do
+			local card = prioRefs.cards[k]
+			local h = coord.handlers[k]
+			if card and h then
+				card.frame.LayoutOrder = rank
+				card.rankLbl.Text = "#" .. tostring(rank)
+				local isEn = h.isEnabled and h.isEnabled() == true
+				local hasW = false
+				if isEn and type(h.hasWork) == "function" then
+					local okW, resW = pcall(h.hasWork)
+					hasW = (okW and resW == true)
+				end
+
+				if not isEn then
+					card.stateLbl.Text = "OFF"
+					card.stateLbl.TextColor3 = C_SUB
+					card.toggleBtn.Text = "OFF"
+					card.toggleBtn.BackgroundColor3 = C_ROW_HOT
+					card.rankBg.BackgroundColor3 = C_PANEL
+				elseif activeOwner == k then
+					card.stateLbl.Text = "ACTIVE"
+					card.stateLbl.TextColor3 = C_OK
+					card.toggleBtn.Text = "ON"
+					card.toggleBtn.BackgroundColor3 = C_OK
+					card.rankBg.BackgroundColor3 = C_ACCENT
+				elseif hasW then
+					card.stateLbl.Text = "YIELDED"
+					card.stateLbl.TextColor3 = C_WARN
+					card.toggleBtn.Text = "ON"
+					card.toggleBtn.BackgroundColor3 = C_OK
+					card.rankBg.BackgroundColor3 = C_ACCENT_DIM
+				else
+					card.stateLbl.Text = "WAITING"
+					card.stateLbl.TextColor3 = C_SUB
+					card.toggleBtn.Text = "ON"
+					card.toggleBtn.BackgroundColor3 = C_OK
+					card.rankBg.BackgroundColor3 = C_PANEL
+				end
+			end
+		end
+	end
+
+	local function buildPriorityBody(parentFrame)
+		local body = Instance.new("ScrollingFrame")
+		body.Position               = UDim2.fromOffset(0, 0)
+		body.Size                   = UDim2.new(1, 0, 1, 0)
+		body.BackgroundTransparency = 1
+		body.BorderSizePixel        = 0
+		body.ScrollBarThickness     = 4
+		body.ScrollBarImageColor3   = Color3.fromRGB(90, 96, 110)
+		body.AutomaticCanvasSize    = Enum.AutomaticSize.Y
+		body.CanvasSize             = UDim2.new()
+		body.Visible                = false
+		body.Parent                 = parentFrame
+
+		local masterBtn = Instance.new("TextButton")
+		masterBtn.Text = "Start All Farms"
+		masterBtn.Font = Enum.Font.GothamBold
+		masterBtn.TextSize = 12
+		masterBtn.TextColor3 = C_TEXT
+		masterBtn.BackgroundColor3 = C_ACCENT
+		masterBtn.BorderSizePixel = 0
+		masterBtn.Position = UDim2.fromOffset(PAGE_PAD_X, 2)
+		masterBtn.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 26)
+		masterBtn.Parent = body
+		corner(masterBtn, 6)
+		prioRefs.masterBtn = masterBtn
+
+		masterBtn.MouseButton1Click:Connect(function()
+			local coord = appMod.farmPriority
+			local anyOn = false
+			if coord then
+				for _, k in ipairs(coord.order) do
+					local h = coord.handlers[k]
+					if h and h.isEnabled and h.isEnabled() then
+						anyOn = true
+						break
+					end
+				end
+			end
+			if appMod.setAllFarmsRunning then
+				appMod.setAllFarmsRunning(not anyOn)
+			end
+		end)
+
+		local ownerLbl = Instance.new("TextLabel")
+		ownerLbl.Text = "Active: None  |  Enabled: 0/3"
+		ownerLbl.Font = Enum.Font.GothamBold
+		ownerLbl.TextSize = 11
+		ownerLbl.TextColor3 = C_SUB
+		ownerLbl.BackgroundTransparency = 1
+		ownerLbl.TextXAlignment = Enum.TextXAlignment.Left
+		ownerLbl.TextTruncate = Enum.TextTruncate.AtEnd
+		ownerLbl.Position = UDim2.fromOffset(PAGE_PAD_X, 32)
+		ownerLbl.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 16)
+		ownerLbl.Parent = body
+		prioRefs.ownerLbl = ownerLbl
+
+		local listHost = Instance.new("Frame")
+		listHost.Position = UDim2.fromOffset(PAGE_PAD_X, 52)
+		listHost.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 164)
+		listHost.BackgroundTransparency = 1
+		listHost.Parent = body
+
+		local listLayout = Instance.new("UIListLayout")
+		listLayout.Padding = UDim.new(0, 6)
+		listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		listLayout.Parent = listHost
+
+		local labels = {
+			Bosses       = "Bosses (DIO / Jotaro)",
+			AutoCollect  = "Auto Collect (Items / Barges)",
+			Eliminations = "Elims. (Contracts)",
+		}
+
+		for rank, key in ipairs(appMod.farmPriority and appMod.farmPriority.order or {"Bosses", "AutoCollect", "Eliminations"}) do
+			local card = Instance.new("Frame")
+			card.Size = UDim2.new(1, 0, 0, 48)
+			card.BackgroundColor3 = C_PANEL
+			card.BorderSizePixel = 0
+			card.LayoutOrder = rank
+			card.Parent = listHost
+			corner(card, 6)
+			stroke(card, C_STROKE, 1, 0.35)
+
+			local rankBg = Instance.new("Frame")
+			rankBg.Size = UDim2.fromOffset(26, 32)
+			rankBg.Position = UDim2.fromOffset(8, 8)
+			rankBg.BackgroundColor3 = C_ROW_HOT
+			rankBg.BorderSizePixel = 0
+			rankBg.Parent = card
+			corner(rankBg, 5)
+
+			local rankLbl = Instance.new("TextLabel")
+			rankLbl.Text = "#" .. tostring(rank)
+			rankLbl.Font = Enum.Font.GothamBold
+			rankLbl.TextSize = 12
+			rankLbl.TextColor3 = C_TEXT
+			rankLbl.BackgroundTransparency = 1
+			rankLbl.Size = UDim2.new(1, 0, 1, 0)
+			rankLbl.Parent = rankBg
+
+			local nameLbl = Instance.new("TextLabel")
+			nameLbl.Text = labels[key] or key
+			nameLbl.Font = Enum.Font.GothamBold
+			nameLbl.TextSize = 12
+			nameLbl.TextColor3 = C_TEXT
+			nameLbl.BackgroundTransparency = 1
+			nameLbl.Position = UDim2.fromOffset(42, 6)
+			nameLbl.Size = UDim2.new(1, -158, 0, 17)
+			nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+			nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+			nameLbl.Parent = card
+
+			local stateLbl = Instance.new("TextLabel")
+			stateLbl.Text = "OFF"
+			stateLbl.Font = Enum.Font.Gotham
+			stateLbl.TextSize = 11
+			stateLbl.TextColor3 = C_SUB
+			stateLbl.BackgroundTransparency = 1
+			stateLbl.Position = UDim2.fromOffset(42, 24)
+			stateLbl.Size = UDim2.new(1, -158, 0, 15)
+			stateLbl.TextXAlignment = Enum.TextXAlignment.Left
+			stateLbl.Parent = card
+
+			local toggleBtn = Instance.new("TextButton")
+			toggleBtn.Text = "OFF"
+			toggleBtn.Font = Enum.Font.GothamBold
+			toggleBtn.TextSize = 11
+			toggleBtn.TextColor3 = C_TEXT
+			toggleBtn.BackgroundColor3 = C_ROW_HOT
+			toggleBtn.BorderSizePixel = 0
+			toggleBtn.Position = UDim2.new(1, -108, 0.5, -13)
+			toggleBtn.Size = UDim2.fromOffset(44, 26)
+			toggleBtn.Parent = card
+			corner(toggleBtn, 5)
+
+			local upBtn = Instance.new("TextButton")
+			upBtn.Text = "▲"
+			upBtn.Font = Enum.Font.GothamBold
+			upBtn.TextSize = 10
+			upBtn.TextColor3 = C_TEXT
+			upBtn.BackgroundColor3 = C_ROW
+			upBtn.BorderSizePixel = 0
+			upBtn.Position = UDim2.new(1, -58, 0.5, -13)
+			upBtn.Size = UDim2.fromOffset(24, 26)
+			upBtn.Parent = card
+			corner(upBtn, 5)
+
+			local downBtn = Instance.new("TextButton")
+			downBtn.Text = "▼"
+			downBtn.Font = Enum.Font.GothamBold
+			downBtn.TextSize = 10
+			downBtn.TextColor3 = C_TEXT
+			downBtn.BackgroundColor3 = C_ROW
+			downBtn.BorderSizePixel = 0
+			downBtn.Position = UDim2.new(1, -30, 0.5, -13)
+			downBtn.Size = UDim2.fromOffset(24, 26)
+			downBtn.Parent = card
+			corner(downBtn, 5)
+
+			toggleBtn.MouseButton1Click:Connect(function()
+				local h = appMod.farmPriority and appMod.farmPriority.handlers[key]
+				if h and h.isEnabled and h.setEnabled then
+					h.setEnabled(not h.isEnabled())
+				end
+			end)
+
+			upBtn.MouseButton1Click:Connect(function()
+				if appMod.moveFarmPriority then
+					appMod.moveFarmPriority(key, -1)
+				end
+			end)
+
+			downBtn.MouseButton1Click:Connect(function()
+				if appMod.moveFarmPriority then
+					appMod.moveFarmPriority(key, 1)
+				end
+			end)
+
+			prioRefs.cards[key] = {
+				frame     = card,
+				rankBg    = rankBg,
+				rankLbl   = rankLbl,
+				stateLbl  = stateLbl,
+				toggleBtn = toggleBtn,
+			}
+		end
+
+		local hintLbl = Instance.new("TextLabel")
+		hintLbl.Text = "Higher-ranked farms preempt lower ones when targets are active.\n#1 Bosses kills DIO/Jotaro, #2 Collect loots drops/arrows, #3 Elims. runs contracts."
+		hintLbl.Font = Enum.Font.Gotham
+		hintLbl.TextSize = 11
+		hintLbl.TextColor3 = C_SUB
+		hintLbl.BackgroundTransparency = 1
+		hintLbl.TextWrapped = true
+		hintLbl.TextXAlignment = Enum.TextXAlignment.Left
+		hintLbl.TextYAlignment = Enum.TextYAlignment.Top
+		hintLbl.Position = UDim2.fromOffset(PAGE_PAD_X, 220)
+		hintLbl.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 42)
+		hintLbl.Parent = body
+
+		appMod.refreshPriorityUI()
+		return body
+	end
+
+	appMod.buildAutoFarmBody = function(tab, parentFrame)
+		local body = Instance.new("Frame")
+		body.Position               = UDim2.fromOffset(143, 38)
+		body.Size                   = UDim2.new(1, -143, 1, -82)
+		body.BackgroundTransparency = 1
+		body.Visible                = false
+		body.Parent                 = parentFrame
+
+		-- Global Client & Performance Controls grouped in a collapsible card
+		local initialAutoPlay = false
+		pcall(function()
+			if typeof(isfile) == "function" and typeof(readfile) == "function" and isfile("StandOutHold/_autoplay_menu.txt") then
+				initialAutoPlay = (tostring(readfile("StandOutHold/_autoplay_menu.txt")):gsub("%s+", "") == "1")
+			end
+		end)
+
+		local CARD_EXPANDED_H = 226
+		local CARD_COLLAPSED_H = 30
+
+		local clientCard = Instance.new("Frame")
+		clientCard.Position = UDim2.fromOffset(PAGE_PAD_X, 6)
+		clientCard.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, CARD_EXPANDED_H)
+		clientCard.BackgroundColor3 = C_HEADER
+		clientCard.BorderSizePixel = 0
+		clientCard.ClipsDescendants = true
+		clientCard.Parent = body
+		corner(clientCard, 8)
+		stroke(clientCard, C_STROKE, 1, 0.45)
+
+		local cardHeader = Instance.new("Frame")
+		cardHeader.Size = UDim2.new(1, 0, 0, 28)
+		cardHeader.BackgroundTransparency = 1
+		cardHeader.Parent = clientCard
+
+		local cardTitle = Instance.new("TextLabel")
+		cardTitle.Text = "Client Controls"
+		cardTitle.Font = Enum.Font.GothamBold
+		cardTitle.TextSize = 11
+		cardTitle.TextColor3 = C_SUB
+		cardTitle.BackgroundTransparency = 1
+		cardTitle.Position = UDim2.fromOffset(10, 0)
+		cardTitle.Size = UDim2.new(1, -70, 1, 0)
+		cardTitle.TextXAlignment = Enum.TextXAlignment.Left
+		cardTitle.Parent = cardHeader
+
+		local cardCollapseBtn = Instance.new("TextButton")
+		cardCollapseBtn.Text = "Hide"
+		cardCollapseBtn.Font = Enum.Font.GothamBold
+		cardCollapseBtn.TextSize = 10
+		cardCollapseBtn.TextColor3 = C_SUB
+		cardCollapseBtn.BackgroundColor3 = C_PANEL
+		cardCollapseBtn.BorderSizePixel = 0
+		cardCollapseBtn.Position = UDim2.new(1, -54, 0.5, -9)
+		cardCollapseBtn.Size = UDim2.fromOffset(44, 18)
+		cardCollapseBtn.Parent = cardHeader
+		corner(cardCollapseBtn, 4)
+		stroke(cardCollapseBtn, C_STROKE, 1, 0.5)
+
+		local clientInner = Instance.new("Frame")
+		clientInner.Position = UDim2.fromOffset(-6, 28)
+		clientInner.Size = UDim2.new(1, 12, 1, -28)
+		clientInner.BackgroundTransparency = 1
+		clientInner.Parent = clientCard
+
+		configControls.ecoMode = buildToggle(clientInner, "Eco Mode", 2, false, function(state)
+			if appMod.toggleEcoMode then appMod.toggleEcoMode(state) end
+		end, false)
+
+		configControls.no3dRender = buildToggle(clientInner, "Disable 3D Render", 35, false, function(state)
+			if appMod.toggleNo3DRender then appMod.toggleNo3DRender(state) end
+		end, false)
+
+		configControls.autoPlay = buildToggle(clientInner, "Auto-Play Main Menu", 68, initialAutoPlay, function(state)
+			if appMod.setAutoPlayMenu then appMod.setAutoPlayMenu(state) end
+		end, false)
+
+		configControls.hideWhileWaiting = buildToggle(clientInner, "Hide While Waiting", 101, false, function(state)
+			if appMod.setHideWhileWaiting then appMod.setHideWhileWaiting(state) end
+		end, false)
+
+		configControls.autoCloak = buildToggle(clientInner, "Auto Cloak", 134, false, function(state)
+			if appMod.setAutoCloak then appMod.setAutoCloak(state) end
+		end, false)
+
+		local resetFpsBtn = Instance.new("TextButton")
+		resetFpsBtn.Text = "Reset FPS"
+		resetFpsBtn.Font = Enum.Font.GothamBold
+		resetFpsBtn.TextSize = 11
+		resetFpsBtn.TextColor3 = C_TEXT
+		resetFpsBtn.BackgroundColor3 = C_PANEL
+		resetFpsBtn.BorderSizePixel = 0
+		resetFpsBtn.Position = UDim2.fromOffset(PAGE_PAD_X, 168)
+		resetFpsBtn.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 24)
+		resetFpsBtn.Parent = clientInner
+		corner(resetFpsBtn, 6)
+		stroke(resetFpsBtn, C_STROKE, 1, 0.4)
+		resetFpsBtn.MouseEnter:Connect(function() resetFpsBtn.BackgroundColor3 = C_ROW_HOT end)
+		resetFpsBtn.MouseLeave:Connect(function() resetFpsBtn.BackgroundColor3 = C_PANEL end)
+
+		resetFpsBtn.MouseButton1Click:Connect(function()
+			if appMod.resetFpsCap then appMod.resetFpsCap() end
+		end)
+
+		local subBar = Instance.new("Frame")
+		subBar.Position               = UDim2.fromOffset(PAGE_PAD_X, CARD_EXPANDED_H + 14)
+		subBar.Size                   = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, 30)
+		subBar.BackgroundColor3       = C_HEADER
+		subBar.BorderSizePixel        = 0
+		subBar.Parent                 = body
+		corner(subBar, 7)
+		stroke(subBar, C_STROKE, 1, 0.45)
+
+		local subPad = Instance.new("UIPadding")
+		subPad.PaddingLeft = UDim.new(0, 3)
+		subPad.PaddingRight = UDim.new(0, 3)
+		subPad.PaddingTop = UDim.new(0, 3)
+		subPad.PaddingBottom = UDim.new(0, 3)
+		subPad.Parent = subBar
+
+		local subLayout = Instance.new("UIListLayout")
+		subLayout.FillDirection = Enum.FillDirection.Horizontal
+		subLayout.Padding = UDim.new(0, 4)
+		subLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		subLayout.Parent = subBar
+
+		local subHost = Instance.new("Frame")
+		subHost.Position               = UDim2.fromOffset(0, CARD_EXPANDED_H + 50)
+		subHost.Size                   = UDim2.new(1, 0, 1, -(CARD_EXPANDED_H + 50))
+		subHost.BackgroundTransparency = 1
+		subHost.Parent                 = body
+
+		local controlsHidden = false
+		cardCollapseBtn.MouseButton1Click:Connect(function()
+			controlsHidden = not controlsHidden
+			local targetCardH = controlsHidden and CARD_COLLAPSED_H or CARD_EXPANDED_H
+			cardCollapseBtn.Text = controlsHidden and "Show" or "Hide"
+			clientInner.Visible = not controlsHidden
+			clientCard.Size = UDim2.new(1, PAGE_WIDTH_OFFSET, 0, targetCardH)
+			subBar.Position = UDim2.fromOffset(PAGE_PAD_X, targetCardH + 14)
+			subHost.Position = UDim2.fromOffset(0, targetCardH + 50)
+			subHost.Size = UDim2.new(1, 0, 1, -(targetCardH + 50))
+		end)
+
+		local collectShim = { state = { shownCount = 0 } }
+		buildAutoCollectBody(collectShim, subHost)
+
+		local elimShim = { state = { shownCount = 0 } }
+		appMod.buildEliminationsBody(elimShim, subHost)
+
+		local bossShim = { state = { shownCount = 0 } }
+		appMod.buildSpawnedBossesBody(bossShim, subHost)
+
+		local prioBody = buildPriorityBody(subHost)
+
+		local subDefs = {
+			{ key = "Collect",      label = "Collect",      body = collectShim.body },
+			{ key = "Eliminations", label = "Elims.",       body = elimShim.body },
+			{ key = "Bosses",       label = "Bosses",       body = bossShim.body },
+			{ key = "Priority",     label = "Priority",     body = prioBody },
+		}
+
+		local subBtns = {}
+
+		local function selectSubtab(key)
+			closeAllDropdowns(subHost)
+			for _, def in ipairs(subDefs) do
+				local on = (def.key == key)
+				if def.body then
+					def.body.Visible = on
+				end
+				local btn = subBtns[def.key]
+				if btn then
+					btn.BackgroundColor3 = on and C_ACCENT or C_HEADER
+					btn.BackgroundTransparency = on and 0 or 1
+					btn.TextColor3       = on and C_TEXT or C_SUB
+					btn.Font             = on and Enum.Font.GothamBold or Enum.Font.Gotham
+				end
+			end
+			if key == "Priority" and appMod.refreshPriorityUI then
+				appMod.refreshPriorityUI()
+			elseif key == "Bosses" and appMod.refreshBossMonitorUI then
+				appMod.refreshBossMonitorUI()
+			end
+		end
+
+		for idx, def in ipairs(subDefs) do
+			local btn = Instance.new("TextButton")
+			btn.Text             = def.label
+			btn.Font             = Enum.Font.Gotham
+			btn.TextSize         = 11
+			btn.TextColor3       = C_SUB
+			btn.BackgroundColor3 = C_HEADER
+			btn.BackgroundTransparency = 1
+			btn.BorderSizePixel  = 0
+			btn.LayoutOrder      = idx
+			btn.Size             = UDim2.new(0.25, -3, 1, 0)
+			btn.Parent           = subBar
+			corner(btn, 5)
+			subBtns[def.key] = btn
+
+			btn.MouseButton1Click:Connect(function()
+				selectSubtab(def.key)
+			end)
+		end
+
+		appMod.selectAutoFarmSubtab = selectSubtab
+		selectSubtab("Collect")
+
+		tab.body = body
+		tab.state = { shownCount = 0 }
+	end
+
+	-- Periodic Priority UI sync while active
+	task.spawn(function()
+		while true do
+			task.wait(0.6)
+			if not isInstanceAlive() then return end
+			if appMod.getActiveFarmOwner then appMod.getActiveFarmOwner() end
+			if appMod.refreshPriorityUI then appMod.refreshPriorityUI() end
+		end
+	end)
+end)()
+
 for i, tab in ipairs(tabs) do
 	tab.tabBtn = buildTabBtn(tab, i - 1, tabBar)
-	if tab.isBosses then
-		appMod.buildSpawnedBossesBody(tab, main)
-	elseif tab.isAutoCollect then
-		buildAutoCollectBody(tab, main)
-	elseif tab.isEliminations then
-		appMod.buildEliminationsBody(tab, main)
+	if tab.isAutoFarm then
+		appMod.buildAutoFarmBody(tab, main)
 	elseif tab.isMisc then
 		buildMiscBody(tab, main)
 	elseif tab.isConfigs then
@@ -7174,23 +8953,28 @@ end
 updateCountLabel = function()
 	if not activeTab then return end
 
-	if activeTab.isAutoCollect then
-		if autoCollectState.running then
-			countLabel.Text = "RUNNING"
+	if activeTab.isAutoFarm then
+		local owner = appMod.getActiveFarmOwner and appMod.getActiveFarmOwner() or nil
+		if owner == "Bosses" then
+			countLabel.Text = "BOSS"
+			countLabel.BackgroundColor3 = C_OK
+		elseif owner == "AutoCollect" then
+			countLabel.Text = "COLLECT"
+			countLabel.BackgroundColor3 = C_OK
+		elseif owner == "Eliminations" then
+			countLabel.Text = "ELIM"
 			countLabel.BackgroundColor3 = C_OK
 		else
-			countLabel.Text = "IDLE"
-			countLabel.BackgroundColor3 = C_ROW_HOT
-		end
-		countLabel.Size = UDim2.fromOffset(70, 22)
-		return
-	elseif activeTab.isEliminations then
-		if appMod.isEliminationsRunning and appMod.isEliminationsRunning() then
-			countLabel.Text = "RUNNING"
-			countLabel.BackgroundColor3 = C_OK
-		else
-			countLabel.Text = "IDLE"
-			countLabel.BackgroundColor3 = C_ROW_HOT
+			local anyOn = (autoCollectState.running == true)
+				or (appMod.isBossFarmRunning and appMod.isBossFarmRunning())
+				or (appMod.isEliminationsRunning and appMod.isEliminationsRunning())
+			if anyOn then
+				countLabel.Text = "WAIT"
+				countLabel.BackgroundColor3 = C_WARN
+			else
+				countLabel.Text = "IDLE"
+				countLabel.BackgroundColor3 = C_ROW_HOT
+			end
 		end
 		countLabel.Size = UDim2.fromOffset(70, 22)
 		return
@@ -7198,12 +8982,6 @@ updateCountLabel = function()
 		countLabel.Text = "TOOLS"
 		countLabel.BackgroundColor3 = C_ACCENT
 		countLabel.Size = UDim2.fromOffset(60, 22)
-		return
-	elseif activeTab.isBosses then
-		local count = activeTab.state.shownCount or 0
-		countLabel.Text = count .. " active"
-		countLabel.BackgroundColor3 = (count > 0) and C_OK or C_ROW_HOT
-		countLabel.Size = UDim2.fromOffset(70, 22)
 		return
 	elseif activeTab.isConfigs then
 		local count = activeTab.state.shownCount or 0
@@ -7247,13 +9025,13 @@ local function showTab(tab)
 		local isSelected = (t == tab)
 		t.body.Visible = isSelected
 
-		t.tabBtn.BackgroundColor3 = isSelected and C_PANEL or C_BG
-		t.tabBtn.TextColor3       = isSelected and C_TEXT   or C_SUB
+		t.tabBtn.BackgroundColor3 = isSelected and C_PANEL or C_HEADER
+		t.tabBtn.BackgroundTransparency = isSelected and 0 or 1
+		t.tabBtn.TextColor3       = isSelected and C_TEXT or C_SUB
 		t.tabBtn.Font             = isSelected and Enum.Font.GothamBold or Enum.Font.Gotham
-
-		TweenService:Create(t.tabBtn, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-			Size = isSelected and UDim2.new(1, -20, 0, 36) or UDim2.new(1, -36, 0, 26)
-		}):Play()
+		if t.activeBar then
+			t.activeBar.Visible = isSelected
+		end
 	end
 	updateCountLabel()
 end
@@ -7345,12 +9123,65 @@ UserInputService.InputChanged:Connect(function(input)
 end)
 
 local minimized     = false
-local expandedSize  = UDim2.fromOffset(490, 516)
-local collapsedSize = UDim2.fromOffset(490, 38)
+local expandedSize  = UDim2.fromOffset(uiChrome.initW, uiChrome.initH)
+local collapsedSize = UDim2.fromOffset(uiChrome.initW, 38)
+
+do
+	local resizing = false
+	local rStartPos, rStartSize = nil, nil
+
+	local function setGripHighlight(active)
+		for _, bar in ipairs(uiChrome.gripBars) do
+			bar.BackgroundColor3 = active and C_ACCENT or C_SUB
+			bar.BackgroundTransparency = active and 0 or 0.45
+		end
+	end
+
+	uiChrome.gripHit.MouseEnter:Connect(function()
+		setGripHighlight(true)
+	end)
+	uiChrome.gripHit.MouseLeave:Connect(function()
+		if not resizing then setGripHighlight(false) end
+	end)
+	uiChrome.gripHit.InputBegan:Connect(function(input)
+		if minimized then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+			resizing = true
+			rStartPos = input.Position
+			rStartSize = Vector2.new(main.AbsoluteSize.X, main.AbsoluteSize.Y)
+			setGripHighlight(true)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if not resizing then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+			resizing = false
+			setGripHighlight(false)
+			uiChrome.saveSize(expandedSize.X.Offset, expandedSize.Y.Offset)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if not resizing or minimized then return end
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch then
+			local delta = input.Position - rStartPos
+			local vp = Camera and Camera.ViewportSize or Vector2.new(1280, 720)
+			local maxW = math.max(uiChrome.minW + 40, math.floor(vp.X - 30))
+			local maxH = math.max(uiChrome.minH + 40, math.floor(vp.Y - 30))
+			local newW = math.clamp(math.round(rStartSize.X + delta.X), uiChrome.minW, maxW)
+			local newH = math.clamp(math.round(rStartSize.Y + delta.Y), uiChrome.minH, maxH)
+			expandedSize = UDim2.fromOffset(newW, newH)
+			collapsedSize = UDim2.fromOffset(newW, 38)
+			main.Size = expandedSize
+		end
+	end)
+end
 
 minBtn.MouseButton1Click:Connect(function()
 	minimized = not minimized
-	minBtn.Text = minimized and "+" or "-"
+	minBtn.Text = minimized and "+" or "–"
 
 	if minimized then
 		TweenService:Create(headerCorner, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
@@ -7359,6 +9190,7 @@ minBtn.MouseButton1Click:Connect(function()
 		tabBar.Visible = false
 		separator.Visible = false
 		footer.Visible = false
+		resizeHandle.Visible = false
 		for _, t in ipairs(tabs) do t.body.Visible = false end
 		TweenService:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 			Size = collapsedSize
@@ -7375,6 +9207,7 @@ minBtn.MouseButton1Click:Connect(function()
 				tabBar.Visible = true
 				separator.Visible = true
 				footer.Visible = true
+				resizeHandle.Visible = true
 				if activeTab then activeTab.body.Visible = true end
 			end
 		end)
