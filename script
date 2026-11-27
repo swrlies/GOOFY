@@ -212,13 +212,37 @@ local activeTab
 local updateCountLabel
 local tabs = {}
 
-for _, desc in ipairs(workspace:GetDescendants()) do
-	if desc.Name == "SIM_Marker"
-		or desc.Name == "SIM_Highlight"
-		or desc.Name == "SIM_TweenHighlight"
-		or desc.Name == "SIM_TweenTargetNode"
-		or desc.Name == "SIM_BargePlatform" then
-		desc:Destroy()
+do
+	local SIM_CLEANUP = {
+		SIM_Marker = true,
+		SIM_Highlight = true,
+		SIM_TweenHighlight = true,
+		SIM_TweenTargetNode = true,
+		SIM_BargePlatform = true,
+		_SIM_HidePlatform = true,
+		_SIM_HideRoof = true,
+	}
+	for _, ch in ipairs(workspace:GetChildren()) do
+		if SIM_CLEANUP[ch.Name] then ch:Destroy() end
+	end
+	local g = workspace:FindFirstChild("Game")
+	local scanRoots = {
+		g and g:FindFirstChild("SpawnedItems"),
+		g and g:FindFirstChild("WorldEventDrops"),
+		g and g:FindFirstChild("Players"),
+		g and g:FindFirstChild("Gardening"),
+		workspace:FindFirstChild("SIM_ScrapBeacons"),
+		workspace:FindFirstChild("SIM_CaseBeacons"),
+		workspace:FindFirstChild("SIM_TeleportBeacons"),
+	}
+	for _, root in ipairs(scanRoots) do
+		if root then
+			for _, desc in ipairs(root:GetDescendants()) do
+				if SIM_CLEANUP[desc.Name] then
+					desc:Destroy()
+				end
+			end
+		end
 	end
 end
 
@@ -443,20 +467,81 @@ local function scheduleScrapUpdate()
 	end)
 end
 
-local function rescanScrapPieces()
+local scrapScanMeta = { lastAt = 0, fallbackDone = false }
+
+local function hookScrapPlatform(plat, mapListenerConns)
+	if not plat then return end
+	table.insert(mapListenerConns, plat.ChildAdded:Connect(function(obj)
+		if obj.Name == "DebrisPiece" then
+			local pos = getItemPosition(obj)
+			if pos then
+				scrapPieces[obj] = pos
+				scheduleScrapUpdate()
+			else
+				task.delay(0.1, function()
+					if obj:IsDescendantOf(workspace) then
+						local p = getItemPosition(obj)
+						if p then
+							scrapPieces[obj] = p
+							scheduleScrapUpdate()
+						end
+					end
+				end)
+			end
+		end
+	end))
+	table.insert(mapListenerConns, plat.ChildRemoved:Connect(function(obj)
+		if obj.Name == "DebrisPiece" and scrapPieces[obj] then
+			scrapPieces[obj] = nil
+			scheduleScrapUpdate()
+			task.delay(0.15, function()
+				if activeTab and activeTab.name == "Scrap Barges" and activeTab.rebuild then
+					activeTab.rebuild()
+				end
+			end)
+		end
+	end))
+end
+
+local function rescanScrapPieces(force)
+	local now = os.clock()
+	if not force and (now - scrapScanMeta.lastAt) < 4.0 then
+		return
+	end
+	scrapScanMeta.lastAt = now
+
 	local gameFolder = workspace:FindFirstChild("Game")
 	local mapFolder  = gameFolder and gameFolder:FindFirstChild("Map")
 	if not mapFolder then
 		table.clear(scrapPieces)
+		scrapScanMeta.fallbackDone = false
 		updateScrapBeacons()
 		return
 	end
 
 	local newPieces = {}
-	for _, obj in ipairs(mapFolder:GetDescendants()) do
-		if obj.Name == "DebrisPiece" and obj:IsDescendantOf(workspace) then
-			local pos = getItemPosition(obj)
-			if pos then newPieces[obj] = pos end
+	local sawPlatformContainer = false
+	for _, child in ipairs(mapFolder:GetChildren()) do
+		local cname = child.Name
+		if cname == "ScrapPlatform" or cname == "DestructionStructure" or cname == "Destructable" then
+			sawPlatformContainer = true
+			for _, obj in ipairs(child:GetChildren()) do
+				if obj.Name == "DebrisPiece" and obj:IsDescendantOf(workspace) then
+					local pos = getItemPosition(obj)
+					if pos then newPieces[obj] = pos end
+				end
+			end
+		end
+	end
+
+	-- One-time fallback if the map didn't expose standard ScrapPlatform containers yet
+	if not next(newPieces) and not sawPlatformContainer and not scrapScanMeta.fallbackDone then
+		scrapScanMeta.fallbackDone = true
+		for _, obj in ipairs(mapFolder:GetDescendants()) do
+			if obj.Name == "DebrisPiece" and obj:IsDescendantOf(workspace) then
+				local pos = getItemPosition(obj)
+				if pos then newPieces[obj] = pos end
+			end
 		end
 	end
 
@@ -495,6 +580,7 @@ local function setupMapListeners(force)
 		for _, c in ipairs(mapListenerConns) do c:Disconnect() end
 		mapListenerConns = {}
 		lastScrapMapFolder = nil
+		scrapScanMeta.fallbackDone = false
 		return false
 	end
 
@@ -505,40 +591,30 @@ local function setupMapListeners(force)
 	for _, c in ipairs(mapListenerConns) do c:Disconnect() end
 	mapListenerConns = {}
 	lastScrapMapFolder = mapFolder
+	scrapScanMeta.fallbackDone = false
 	table.clear(scrapPieces)
 
-	rescanScrapPieces()
+	rescanScrapPieces(true)
 	updateScrapBeacons()
 
-	table.insert(mapListenerConns, mapFolder.DescendantAdded:Connect(function(obj)
-		if obj.Name == "DebrisPiece" then
-			local pos = getItemPosition(obj)
-			if pos then
-				scrapPieces[obj] = pos
-				scheduleScrapUpdate()
-			else
-				task.delay(0.1, function()
-					if obj:IsDescendantOf(workspace) then
-						local p = getItemPosition(obj)
-						if p then
-							scrapPieces[obj] = p
-							scheduleScrapUpdate()
-						end
-					end
-				end)
-			end
+	for _, child in ipairs(mapFolder:GetChildren()) do
+		if child.Name == "ScrapPlatform" or child.Name == "DestructionStructure" or child.Name == "Destructable" then
+			hookScrapPlatform(child, mapListenerConns)
 		end
-	end))
+	end
 
-	table.insert(mapListenerConns, mapFolder.DescendantRemoving:Connect(function(obj)
-		if obj.Name == "DebrisPiece" and scrapPieces[obj] then
-			scrapPieces[obj] = nil
-			scheduleScrapUpdate()
-			task.delay(0.15, function()
-				if activeTab and activeTab.name == "Scrap Barges" and activeTab.rebuild then
-					activeTab.rebuild()
+	table.insert(mapListenerConns, mapFolder.ChildAdded:Connect(function(child)
+		if child.Name == "ScrapPlatform" or child.Name == "DestructionStructure" or child.Name == "Destructable" then
+			hookScrapPlatform(child, mapListenerConns)
+			for _, obj in ipairs(child:GetChildren()) do
+				if obj.Name == "DebrisPiece" then
+					local pos = getItemPosition(obj)
+					if pos then
+						scrapPieces[obj] = pos
+					end
 				end
-			end)
+			end
+			scheduleScrapUpdate()
 		end
 	end))
 
@@ -547,6 +623,7 @@ local function setupMapListeners(force)
 			for _, c in ipairs(mapListenerConns) do c:Disconnect() end
 			mapListenerConns = {}
 			lastScrapMapFolder = nil
+			scrapScanMeta.fallbackDone = false
 		end
 	end))
 
@@ -557,9 +634,17 @@ task.spawn(function()
 	while true do
 		if not isInstanceAlive() then return end
 		setupMapListeners(false)
-		rescanScrapPieces()
-		updateScrapBeacons()
-		task.wait(1.0)
+		local pruned = false
+		for obj in pairs(scrapPieces) do
+			if not obj or not obj.Parent or not obj:IsDescendantOf(workspace) then
+				scrapPieces[obj] = nil
+				pruned = true
+			end
+		end
+		if pruned then
+			scheduleScrapUpdate()
+		end
+		task.wait(4.0)
 	end
 end)
 
@@ -956,6 +1041,7 @@ task.spawn(function()
 	while true do
 		task.wait(1.7)
 		if not isInstanceAlive() then return end
+		if #activeMarkers == 0 then continue end
 		for i = #activeMarkers, 1, -1 do
 			local m = activeMarkers[i]
 			if not m.gui or not m.gui.Parent then
@@ -1262,6 +1348,7 @@ end)
 --=====================================================================
 local noclipEnabled = false
 local origCollide = {}
+local movePerfCache = { ncChar = nil, ncParts = nil, ncHum = nil, wsChar = nil, wsHum = nil }
 
 local function isAnyNoclipActive()
 	if autoCollectState and autoCollectState.busyBarge then
@@ -1272,17 +1359,28 @@ end
 
 local function setCharCollide(char, disableCollide)
 	if not char then return end
-	local hum = char:FindFirstChildOfClass("Humanoid")
-	if hum then
+	if movePerfCache.ncChar ~= char or not movePerfCache.ncParts then
+		movePerfCache.ncChar = char
+		movePerfCache.ncHum = char:FindFirstChildOfClass("Humanoid")
+		local parts = {}
+		for _, p in ipairs(char:GetDescendants()) do
+			if p:IsA("BasePart") then
+				table.insert(parts, p)
+			end
+		end
+		movePerfCache.ncParts = parts
+	end
+	local hum = movePerfCache.ncHum
+	if hum and hum.Parent then
 		hum:SetStateEnabled(Enum.HumanoidStateType.Climbing, not disableCollide)
 		hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, not disableCollide)
 		hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, not disableCollide)
 	end
-	for _, p in ipairs(char:GetDescendants()) do
-		if p:IsA("BasePart") then
+	for _, p in ipairs(movePerfCache.ncParts) do
+		if p and p.Parent then
 			if disableCollide then
 				if origCollide[p] == nil then origCollide[p] = p.CanCollide end
-				p.CanCollide = false
+				if p.CanCollide then p.CanCollide = false end
 			else
 				if origCollide[p] ~= nil then
 					p.CanCollide = origCollide[p]
@@ -1315,8 +1413,15 @@ local wsSpeed = 16
 local function applyWalkspeed()
 	if not wsEnabled then return end
 	local char = LocalPlayer.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if hum then hum.WalkSpeed = wsSpeed end
+	if not char then return end
+	if movePerfCache.wsChar ~= char or not movePerfCache.wsHum or not movePerfCache.wsHum.Parent then
+		movePerfCache.wsChar = char
+		movePerfCache.wsHum = char:FindFirstChildOfClass("Humanoid")
+	end
+	local hum = movePerfCache.wsHum
+	if hum and hum.WalkSpeed ~= wsSpeed then
+		hum.WalkSpeed = wsSpeed
+	end
 end
 
 local function toggleWalkspeed(state)
@@ -2661,19 +2766,25 @@ local function triggerInteractOnItem(targetItem, shouldInterrupt)
 		end
 	end
 
-	-- 2. Also check any enabled ProximityPrompt within 12 studs of the item
+	-- 2. Also check any enabled ProximityPrompt within 12 studs of the item (scoped folders, never 118k Map)
 	if not isItemCollectedState(targetItem) then
 		local itemPos = getItemPosition(targetItem)
 		if itemPos then
 			local g = workspace:FindFirstChild("Game")
 			if g then
-				for _, desc in ipairs(g:GetDescendants()) do
+				for _, subName in ipairs({"SpawnedItems", "WorldEventDrops", "Gardening", "Players"}) do
 					if isItemCollectedState(targetItem) then break end
-					if desc:IsA("ProximityPrompt") and desc.Enabled then
-						local p = desc.Parent and getPart(desc.Parent)
-						if p and (p.Position - itemPos).Magnitude <= 12 then
-							if fireSinglePromptZeroHold(desc, targetItem, shouldInterrupt) then
-								triggered = true
+					local subFolder = g:FindFirstChild(subName)
+					if subFolder then
+						for _, desc in ipairs(subFolder:GetDescendants()) do
+							if isItemCollectedState(targetItem) then break end
+							if desc:IsA("ProximityPrompt") and desc.Enabled then
+								local p = desc.Parent and getPart(desc.Parent)
+								if p and (p.Position - itemPos).Magnitude <= 12 then
+									if fireSinglePromptZeroHold(desc, targetItem, shouldInterrupt) then
+										triggered = true
+									end
+								end
 							end
 						end
 					end
@@ -2821,7 +2932,6 @@ local function getItemsForCategory(catName)
 			end
 		end
 	elseif catName == "Scrap Barges" then
-		rescanScrapPieces()
 		for obj in pairs(scrapPieces) do
 			if obj and obj:IsDescendantOf(workspace) then
 				table.insert(items, obj)
@@ -3711,7 +3821,7 @@ task.spawn(function()
 		if not isInstanceAlive() then return end
 		if not autoCollectState.running then
 			autoCollectState.busy = false
-			task.wait(0.15)
+			task.wait(0.35)
 			continue
 		end
 
@@ -4083,7 +4193,7 @@ tabs = {
 		getContainer = function() return scrapBeaconFolder end, },
 	{ name = "World Events", emptyText = "No world event drops found.", autoHighlight = false, notify = true,
 		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("WorldEventDrops") end, },
-	{ name = "Turkeys", emptyText = "No turkeys spawned.", autoHighlight = true, hasAutoHighlightToggle = true, isTurkeyTab = true, notify = true,
+	{ name = "Turkeys", emptyText = "No turkeys spawned.", autoHighlight = false, hasAutoHighlightToggle = true, isTurkeyTab = true, notify = true,
 		getContainer = function() local g = workspace:FindFirstChild("Game"); return g and g:FindFirstChild("Players") end, },
 	{ name = "Auto Farm", isAutoFarm = true, isCustom = true, },
 	{ name = "Miscellaneous", isMisc = true, isCustom = true, },
@@ -6356,6 +6466,7 @@ task.spawn(function()
 		end
 
 		if not bossFarmState.running then
+			waitDur = 0.35
 			continue
 		end
 
@@ -6488,9 +6599,11 @@ end)
 
 task.spawn(function()
 	while true do
-		task.wait(0.5)
+		task.wait(1.0)
 		if not isInstanceAlive() then return end
-		appMod.refreshBossMonitorUI()
+		if main.Visible and not main:GetAttribute("SIM_Minimized") and activeTab and activeTab.isAutoFarm then
+			appMod.refreshBossMonitorUI()
+		end
 	end
 end)
 end)()
@@ -6832,6 +6945,27 @@ local function getCombatModules()
 	return cachedWeaponsMod, cachedStandsMod, cachedUtilityMod
 end
 
+local cachedLightAnimIds = {}
+
+local function resolveCachedLightAnimId(animName, profile, safeIter)
+	local key = tostring(animName) .. "|" .. tostring(profile) .. "|" .. tostring(safeIter)
+	local cached = cachedLightAnimIds[key]
+	if cached ~= nil then
+		return cached ~= false and cached or nil
+	end
+	local assets = ReplicatedStorage:FindFirstChild("Assets")
+	local anims = assets and assets:FindFirstChild("Animations")
+	local animObj
+	if anims then
+		local folder = anims:FindFirstChild(animName) or anims:FindFirstChild(profile) or anims:FindFirstChild("Fists")
+		local lightFolder = folder and (folder:FindFirstChild("Light") or folder:FindFirstChild("M1"))
+		animObj = lightFolder and lightFolder:FindFirstChild(tostring(safeIter))
+	end
+	local id = animObj and animObj.AnimationId or false
+	cachedLightAnimIds[key] = id
+	return id ~= false and id or nil
+end
+
 local function buildDynamicLightPayload(char, token, standObj, iter)
 	local standName = getEquippedStandName()
 	local data = LocalPlayer:FindFirstChild("Data")
@@ -6892,24 +7026,17 @@ local function buildDynamicLightPayload(char, token, standObj, iter)
 		end
 	end
 
-	local animObj
-	local assets = ReplicatedStorage:FindFirstChild("Assets")
-	local anims = assets and assets:FindFirstChild("Animations")
-	if anims then
-		local folder = anims:FindFirstChild(animName) or anims:FindFirstChild(profile) or anims:FindFirstChild("Fists")
-		local lightFolder = folder and (folder:FindFirstChild("Light") or folder:FindFirstChild("M1"))
-		animObj = lightFolder and lightFolder:FindFirstChild(tostring(safeIter))
-	end
+	local animId = resolveCachedLightAnimId(animName, profile, safeIter)
 	local actorModel = useStand and (standObj or getStandActorModel()) or char
 	local isFinisher = (comboLen == 1)
 	local lightHitEvents = pInfo and pInfo.LightHitEvents and pInfo.LightHitEvents[safeIter]
 
 	local animLen = math.max(0.28, at1 + len1 + 0.04)
 	local animTbl
-	if animObj and actorModel then
+	if animId and actorModel then
 		animTbl = {
 			Actor = actorModel,
-			Id = animObj.AnimationId,
+			Id = animId,
 			Speed = speed1 / mult,
 		}
 	end
@@ -7369,6 +7496,7 @@ task.spawn(function()
 		if not isInstanceAlive() then return end
 
 		if not elimState.running then
+			waitDur = 0.35
 			continue
 		end
 
@@ -7828,6 +7956,7 @@ end)()
 			end
 
 			if not turkeyFarmState.running then
+				waitDur = 0.35
 				continue
 			end
 
@@ -8954,10 +9083,12 @@ end)()
 	-- Periodic Priority UI sync while active
 	task.spawn(function()
 		while true do
-			task.wait(0.6)
+			task.wait(1.0)
 			if not isInstanceAlive() then return end
 			if appMod.getActiveFarmOwner then appMod.getActiveFarmOwner() end
-			if appMod.refreshPriorityUI then appMod.refreshPriorityUI() end
+			if main.Visible and not main:GetAttribute("SIM_Minimized") and activeTab and activeTab.isAutoFarm and appMod.refreshPriorityUI then
+				appMod.refreshPriorityUI()
+			end
 		end
 	end)
 end)()
@@ -9593,6 +9724,7 @@ end
 
 minBtn.MouseButton1Click:Connect(function()
 	minimized = not minimized
+	main:SetAttribute("SIM_Minimized", minimized)
 	minBtn.Text = minimized and "+" or "–"
 
 	if minimized then
@@ -9660,22 +9792,19 @@ end
 
 task.spawn(function()
 	while true do
-		task.wait(1 / TEXT_HZ)
 		if not isInstanceAlive() then return end
-		if activeTab and not activeTab.isCustom then
+		if main.Visible and not main:GetAttribute("SIM_Minimized") and activeTab and not activeTab.isCustom and activeTab.state.showDistance then
+			task.wait(1 / TEXT_HZ)
+			if not isInstanceAlive() then return end
 			local ppos = playerPosition()
 			for _, data in pairs(activeTab.state.rows) do
 				local p = data.part
 				if p and p:IsDescendantOf(workspace) then
-					if activeTab.state.showDistance then
-						local txt = "Unknown distance"
-						if ppos then
-							txt = string.format("%d studs", math.round((p.Position - ppos).Magnitude))
-						end
-						if data.info.Text ~= txt then data.info.Text = txt end
-					else
-						if data.info.Text ~= "" then data.info.Text = "" end
+					local txt = "Unknown distance"
+					if ppos then
+						txt = string.format("%d studs", math.round((p.Position - ppos).Magnitude))
 					end
+					if data.info.Text ~= txt then data.info.Text = txt end
 					if data.tp.BackgroundColor3 ~= C_ACCENT then
 						data.tp.BackgroundColor3 = C_ACCENT
 					end
@@ -9688,6 +9817,13 @@ task.spawn(function()
 					end
 				end
 			end
+		else
+			if activeTab and not activeTab.isCustom and activeTab.state and activeTab.state.rows and not activeTab.state.showDistance then
+				for _, data in pairs(activeTab.state.rows) do
+					if data.info.Text ~= "" then data.info.Text = "" end
+				end
+			end
+			task.wait(0.35)
 		end
 	end
 end)
@@ -9697,7 +9833,7 @@ end)
 --=====================================================================
 task.spawn(function()
 	while true do
-		task.wait(1.5)
+		task.wait(2.5)
 		if not isInstanceAlive() then return end
 		for _, tab in ipairs(tabs) do
 			if tab.isCustom then continue end
